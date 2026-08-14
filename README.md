@@ -53,9 +53,11 @@ se calibre seul, et tout sort dans `sortie/extract_<mode>_<date>/`.
    lancement et ses variantes, une par ligne (la transcription écorche les noms
    propres, donc plusieurs orthographes). Sert uniquement à confirmer qu'un
    lancement a bien été capté ; ça ne change pas la découpe.
+4. **`brands/<chaîne>.png`** *(optionnel)* — le logo à poser sur les vignettes
+   9:16. S'il n'y en a qu'un, il est utilisé automatiquement. Voir Vignettes.
 
-Ces trois fichiers sont ignorés par git : rien de personnel ne part dans le
-dépôt.
+Ces fichiers sont ignorés par git : ni voix, ni token, ni logo de chaîne ne
+partent dans le dépôt.
 
 ---
 
@@ -160,6 +162,56 @@ director-cut run "URL" --mode reportage --fast
 
 ---
 
+## Vignettes 9:16
+
+Le rendu reprend celui des vignettes publiées par les chaînes : **image plein
+cadre** (recadrage 9:16 centré, ni bandes noires ni fond flou) et **logo posé à
+l'emplacement du gabarit de la chaîne**.
+
+Un gabarit, c'est un logo plus trois nombres : marge gauche, marge haute,
+hauteur du logo, exprimés en fraction de l'image de sortie (1080×1920). Les
+gabarits fournis dans `brands.py` sont relevés au pixel près sur de vraies
+vignettes publiées.
+
+Pour l'utiliser : déposer le logo dans `brands/`, en PNG.
+
+```
+brands/
+└── ma_chaine.png
+```
+
+Un seul fichier dans `brands/` → il est appliqué sans rien demander. Plusieurs →
+préciser lequel avec `--brand ma_chaine`. Aucun → vignettes sans logo.
+
+Pour caler un gabarit qui n'est pas fourni, poser un `brands/ma_chaine.json` à
+côté du logo :
+
+```json
+{"left": 0.0759, "top": 0.1969, "height": 0.1151}
+```
+
+### Netteté
+
+Deux choses jouent, dans cet ordre :
+
+1. **Le choix de l'instant.** Une frame prise en plein mouvement est floue quoi
+   qu'on fasse. L'outil teste plusieurs frames autour de l'instant visé et garde
+   la plus nette (variance du laplacien).
+2. **La chaîne de rendu.** Recadrage sur la source en pleine définition,
+   rééchantillonnage Lanczos, puis masque flou pour compenser l'agrandissement.
+   Réglable avec `--sharpen` (0 pour couper).
+
+### Habillage antenne
+
+Un replay porte le logo de la chaîne, l'horloge, la météo et le bandeau titres.
+Le recadrage 9:16 en coupe une partie, et le bandeau du bas ressort tronqué.
+
+`--strip-furniture` sort ces bandes du cadre avant le recadrage : la vignette
+est propre, mais l'agrandissement est plus fort, donc l'image est moins fine.
+C'est un arbitrage à faire sur pièce, sujet par sujet.
+
+---
+
 ## Options
 
 | Option | Effet |
@@ -172,6 +224,9 @@ director-cut run "URL" --mode reportage --fast
 | `--end-trim S` | Marge de fin, jamais de retour plateau (défaut 0.5 s). |
 | `--fast` | Coupe au plan près (défaut : à l'image près). |
 | `--shots N` | Screenshots 9:16 par passage (défaut 4). |
+| `--brand NOM` | Gabarit de vignette (`brands/NOM.png`). Auto s'il n'y en a qu'un. |
+| `--sharpen X` | Force du masque flou sur les vignettes (défaut 0.8, 0 = coupé). |
+| `--strip-furniture` | Sort le bandeau et l'habillage antenne du cadre. |
 | `--no-screens` / `--no-mkv` / `--no-transcript` | Désactive une sortie. |
 | `--workers N` | Tâches en parallèle (défaut 3). |
 | `--name X` | Variante de nom en plus de `names.txt` (répétable). |
@@ -239,7 +294,10 @@ elles-mêmes se valident sur un run réel.
   échantillonnée donne un seuil bancal (jouer sur `--threshold`).
 - Un reportage entrecoupé de longues interviews peut ressortir en plusieurs
   passages → augmenter `--merge-gap`.
-- Les screenshots 9:16 gardent l'image d'origine centrée sur un fond flou
-  (logo et bandeaux restent lisibles) : ils ne recadrent pas intelligemment.
+- Le recadrage 9:16 est centré. Il ne suit pas le sujet : si la personne
+  filmée est sur un bord du cadre, elle peut sortir de la vignette.
+- Sur une source 720p, la vignette 1080×1920 est un agrandissement (×1.8, et
+  ×4 avec `--strip-furniture`). Le masque flou compense, il ne crée pas du
+  détail qui n'existe pas.
 - Les fichiers de configuration (`sample.mp4`, `.hf_token`, `names.txt`) sont
   lus depuis le dossier courant.

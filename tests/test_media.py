@@ -4,7 +4,7 @@ import subprocess
 
 import pytest
 
-from director_cut import audio, cut, mux, scenes, screens
+from director_cut import audio, cut, mux, scenes
 
 
 @pytest.fixture
@@ -16,7 +16,7 @@ def ffmpeg(monkeypatch):
         calls.append(cmd)
         return subprocess.CompletedProcess(cmd, 0, b"", b"")
 
-    for mod in (audio, cut, mux, screens):
+    for mod in (audio, cut, mux):
         monkeypatch.setattr(mod.subprocess, "run", fake_run)
     return calls
 
@@ -107,39 +107,6 @@ def test_mux_mkv_tolerates_a_video_without_audio():
     finally:
         m.subprocess.run = original
     assert "0:a:0?" in calls[0]
-
-
-# --- screenshots 9:16 -----------------------------------------------------
-
-def test_shots_spreads_the_captures_inside_the_passage(ffmpeg, tmp_path,
-                                                       monkeypatch):
-    monkeypatch.setattr(screens.os.path, "exists", lambda p: False)
-    screens.shots("in.mp4", 0.0, 100.0, str(tmp_path), "passage_01", n=4)
-    grabs = [_arg_after(c, "-ss") for c in ffmpeg if "-ss" in c]
-    assert grabs == ["20.000", "40.000", "60.000", "80.000"]
-
-
-def test_shots_returns_one_jpg_per_capture(ffmpeg, tmp_path, monkeypatch):
-    monkeypatch.setattr(screens.os.path, "exists", lambda p: False)
-    out = screens.shots("in.mp4", 0.0, 10.0, str(tmp_path), "passage_01", n=3)
-    assert [o.split("/")[-1] for o in out] == ["passage_01_01.jpg",
-                                               "passage_01_02.jpg",
-                                               "passage_01_03.jpg"]
-
-
-def test_shots_survives_a_zero_length_passage(ffmpeg, tmp_path, monkeypatch):
-    monkeypatch.setattr(screens.os.path, "exists", lambda p: False)
-    assert len(screens.shots("in.mp4", 5.0, 5.0, str(tmp_path), "p", n=2)) == 2
-
-
-def test_vertical_conversion_keeps_the_whole_frame_over_a_blurred_background(
-        ffmpeg):
-    screens.to_vertical("in.png", "out.jpg", w=1080, h=1920)
-    vf = _arg_after(ffmpeg[0], "-filter_complex")
-    assert "1080:1920" in vf
-    assert "boxblur" in vf                               # fond flou
-    assert "force_original_aspect_ratio=decrease" in vf  # image entière gardée
-    assert "overlay=(W-w)/2:(H-h)/2" in vf               # centrée
 
 
 # --- détection de plans ---------------------------------------------------

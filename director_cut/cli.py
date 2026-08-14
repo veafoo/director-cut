@@ -6,8 +6,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import click
 from rich.console import Console
 
-from . import (audio, cut, diarize, download, enroll, identify, launch, mux,
-               scenes, screens, segments, ui)
+from . import (audio, brands, cut, diarize, download, enroll, identify, launch,
+               mux, scenes, screens, segments, ui)
 
 SAMPLE_EXTS = (".mp4", ".mkv", ".webm", ".mov", ".mp3", ".m4a", ".aac",
                ".flac", ".wav")
@@ -121,6 +121,14 @@ def cli():
               help="Coupe rapide au plan près (défaut : à l'image près, plus net).")
 @click.option("--shots", "shots_n", default=4, type=int,
               help="Nombre de screenshots 9:16 par passage.")
+@click.option("--brand", default=None,
+              help="Gabarit de vignette (logo brands/<nom>.png). "
+                   "Défaut: le seul logo présent dans brands/.")
+@click.option("--sharpen", default=screens.SHARPEN, type=float,
+              help="Force du masque flou sur les vignettes (0 = désactivé).")
+@click.option("--strip-furniture", is_flag=True,
+              help="Sort l'habillage antenne (bandeau, horloge, météo) du "
+                   "cadre des vignettes. Image plus propre, moins fine.")
 @click.option("--no-screens", is_flag=True, help="Pas de screenshots.")
 @click.option("--no-mkv", is_flag=True, help="Pas de MKV sous-titré.")
 @click.option("--no-transcript", is_flag=True, help="Pas de sous-titres (ni FR ni EN).")
@@ -129,7 +137,8 @@ def cli():
 @click.option("--hf-token", default=None, help="Défaut: .hf_token ou HF_TOKEN.")
 def run_cmd(url, mode, merge_gap, out, ref, names, threshold, num_speakers, pad,
             min_len, lookback, launch_gap, precut, end_trim, fast, shots_n,
-            no_screens, no_mkv, no_transcript, whisper_size, workers, hf_token):
+            brand, sharpen, strip_furniture, no_screens, no_mkv, no_transcript,
+            whisper_size, workers, hf_token):
     """Traite une URL ou un fichier vidéo local et découpe les passages.
 
     Usage : director-cut run "URL"   ou   director-cut run "/chemin/vers/video.mp4" """
@@ -142,6 +151,18 @@ def run_cmd(url, mode, merge_gap, out, ref, names, threshold, num_speakers, pad,
         os.environ["HF_TOKEN"] = hf_token
     names = _read_names(workdir, names)
     os.makedirs(out, exist_ok=True)
+
+    template = None
+    if not no_screens:
+        try:
+            template = brands.auto(brand, workdir, strip=strip_furniture)
+        except ValueError as e:
+            raise click.ClickException(str(e))
+        if template:
+            ui.info(console, f"vignettes : gabarit {template.name}")
+        elif brands.available(workdir):
+            ui.info(console, "vignettes sans logo (plusieurs gabarits "
+                             "disponibles, précise --brand)")
 
     _ensure_reference(console, ref, workdir, hf_token)
 
@@ -252,7 +273,8 @@ def run_cmd(url, mode, merge_gap, out, ref, names, threshold, num_speakers, pad,
             subs.append((transcribe.clip_srt(
                 en_tx, s, e, os.path.join(dirs["srt"], base + ".en.srt")), "eng"))
         if not no_screens:
-            screens.shots(video, s, e, dirs["screens"], base, n=shots_n)
+            screens.shots(video, s, e, dirs["screens"], base, n=shots_n,
+                          brand=template, sharpen=sharpen)
         if not no_mkv and subs:
             mux.mux_mkv(made["mp4"], subs,
                         os.path.join(dirs["mkv"], base + ".mkv"))
