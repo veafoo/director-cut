@@ -1,0 +1,299 @@
+import datetime
+import os
+import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+import click
+from rich.console import Console
+
+from . import (audio, cut, diarize, download, enroll, identify, launch, mux,
+               scenes, screens, segments, ui)
+
+SAMPLE_EXTS = (".mp4", ".mkv", ".webm", ".mov", ".mp3", ".m4a", ".aac",
+               ".flac", ".wav")
+
+
+def _read_token(workdir, opt):
+    if opt:
+        return opt
+    if os.environ.get("HF_TOKEN"):
+        return os.environ["HF_TOKEN"]
+    p = os.path.join(workdir, ".hf_token")
+    if os.path.exists(p):
+        return open(p, encoding="utf-8").read().strip()
+    return None
+
+
+def _read_names(workdir, opt):
+    if opt:
+        return list(opt)
+    p = os.path.join(workdir, "names.txt")
+    if os.path.exists(p):
+        return [l.strip() for l in open(p, encoding="utf-8") if l.strip()]
+    return []
+
+
+def _guess_date(source):
+    """Devine la date du journal/émission depuis l'URL ou le nom de fichier."""
+    m = re.search(r"(20\d{2})(\d{2})(\d{2})", source or "")
+    if m:
+        y, mo, d = m.groups()
+        if 1 <= int(mo) <= 12 and 1 <= int(d) <= 31:
+            return f"{y}-{mo}-{d}"
+    return datetime.date.today().isoformat()
+
+
+def _find_samples(workdir):
+    """samples/ (extraits propres) prioritaire, sinon sample.* (segment brut)."""
+    sdir = os.path.join(workdir, "samples")
+    if os.path.isdir(sdir):
+        files = [os.path.join(sdir, f) for f in sorted(os.listdir(sdir))
+                 if f.lower().endswith(SAMPLE_EXTS)]
+        if files:
+            return files, "clean"
+    for f in sorted(os.listdir(workdir)):
+        if f.lower().startswith("sample") and f.lower().endswith(SAMPLE_EXTS):
+            return [os.path.join(workdir, f)], "segment"
+    return [], None
+
+
+def _ensure_reference(console, ref, workdir, hf_token):
+    samples, kind = _find_samples(workdir)
+    if os.path.exists(ref):
+        if not samples:
+            return
+        ref_m = os.path.getmtime(ref)
+        if all(os.path.getmtime(s) <= ref_m for s in samples):
+            return
+        ui.info(console, "sample plus récent détecté -> recalcul de l'empreinte")
+
+    if not samples:
+        raise click.ClickException(
+            "Pas d'empreinte vocale et pas de sample. Dépose un extrait de sa "
+            "voix sous le nom 'sample.mp4' à la racine du projet, puis relance.")
+
+    console.print("[bold magenta]» Empreinte vocale (automatique)…[/]")
+    if kind == "segment":
+        ui.info(console, f"analyse de {os.path.basename(samples[0])} "
+                         "(repérage du locuteur dominant)")
+        _, thr, dur, _ = enroll.enroll_from_chronique(
+            samples[0], ref, hf_token, diarize.diarize, workdir)
+        ui.info(console, f"empreinte créée · {dur:.0f}s de voix · "
+                         f"seuil auto-calibré {thr:.2f}")
+    else:
+        _, thr, _ = enroll.enroll_from_clean_samples(samples, ref)
+        ui.info(console, f"empreinte créée depuis {len(samples)} extrait(s) · "
+                         f"seuil auto-calibré {thr:.2f}")
+
+
+@click.group()
+def cli():
+    """Découpe les passages d'une personne dans une vidéo, par sa voix."""
+
+
+@cli.command("run")
+@click.argument("url")
+@click.option("--mode", type=click.Choice(["chronique", "reportage", "jt"]),
+              default="chronique",
+              help="chronique = plateau -> annonce du sujet suivant ; "
+                   "reportage = plateau -> retour plateau (présentateur exclu) ; "
+                   "jt = présentation de toute l'édition.")
+@click.option("--merge-gap", default=None, type=float,
+              help="Trou max pour regrouper les prises (défaut selon le mode).")
+@click.option("--out", default="sortie", help="Dossier de sortie racine.")
+@click.option("--ref", default="voix_ref.npz", help="Empreinte (cache).")
+@click.option("--name", "names", multiple=True,
+              help="Nom prononcé au lancement (répétable). Défaut: names.txt.")
+@click.option("--threshold", default=None, type=float,
+              help="Forcer le seuil (sinon auto-calibré).")
+@click.option("--num-speakers", default=None, type=int)
+@click.option("--pad", default=1.0, type=float)
+@click.option("--min-len", default=3.0, type=float)
+@click.option("--lookback", default=40.0, type=float,
+              help="Durée max remontée pour l'annonce (s).")
+@click.option("--launch-gap", default=10.0, type=float,
+              help="Pause max tolérée dans un lancement (s).")
+@click.option("--precut", default=5.0, type=float,
+              help="Fenêtre pour caler une borne sur un cut plateau (s).")
+@click.option("--end-trim", default=0.5, type=float,
+              help="Marge de fin pour ne jamais montrer le retour plateau (s).")
+@click.option("--fast", is_flag=True,
+              help="Coupe rapide au plan près (défaut : à l'image près, plus net).")
+@click.option("--shots", "shots_n", default=4, type=int,
+              help="Nombre de screenshots 9:16 par passage.")
+@click.option("--no-screens", is_flag=True, help="Pas de screenshots.")
+@click.option("--no-mkv", is_flag=True, help="Pas de MKV sous-titré.")
+@click.option("--no-transcript", is_flag=True, help="Pas de sous-titres (ni FR ni EN).")
+@click.option("--whisper-size", default="small")
+@click.option("--workers", default=3, type=int, help="Tâches en parallèle.")
+@click.option("--hf-token", default=None, help="Défaut: .hf_token ou HF_TOKEN.")
+def run_cmd(url, mode, merge_gap, out, ref, names, threshold, num_speakers, pad,
+            min_len, lookback, launch_gap, precut, end_trim, fast, shots_n,
+            no_screens, no_mkv, no_transcript, whisper_size, workers, hf_token):
+    """Traite une URL ou un fichier vidéo local et découpe les passages.
+
+    Usage : director-cut run "URL"   ou   director-cut run "/chemin/vers/video.mp4" """
+    console = Console()
+    ui.splash(console)
+
+    workdir = os.getcwd()
+    hf_token = _read_token(workdir, hf_token)
+    if hf_token:
+        os.environ["HF_TOKEN"] = hf_token
+    names = _read_names(workdir, names)
+    os.makedirs(out, exist_ok=True)
+
+    _ensure_reference(console, ref, workdir, hf_token)
+
+    is_local = os.path.exists(url) and url.lower().endswith(download.VIDEO_EXTS)
+    ui.step(console, 1, 6, "Vidéo locale…" if is_local else "Téléchargement…")
+    video = download.get_video(url, os.path.join(out, "raw"))
+
+    ui.step(console, 2, 6, "Extraction audio…")
+    wav = audio.extract_wav(video, os.path.join(out, "audio.wav"))
+
+    ui.step(console, 3, 6, "Diarisation (qui parle quand)…")
+    diar = diarize.diarize(wav, hf_token, num_speakers)
+
+    ui.step(console, 4, 6, "Identification de sa voix…")
+    label, scores, her, thr = identify.find_her_segments(
+        wav, diar, ref, threshold)
+    if not label:
+        ui.info(console, "scores: " +
+                ", ".join(f"{k}={v:.2f}" for k, v in sorted(scores.items())))
+        raise click.ClickException(
+            "Voix non reconnue. Mets un meilleur sample.mp4 (où elle parle "
+            "longtemps) et relance.")
+
+    # Transcription FR (origine) + EN (traduction), une fois pour tout l'audio
+    fr_tx = en_tx = None
+    need_fr = (not no_transcript) or (mode == "chronique" and names)
+    need_en = not no_transcript
+    if need_fr or need_en:
+        from . import transcribe
+        ui.step(console, 5, 6, "Transcription (FR + EN)…")
+        model = transcribe.load_model(whisper_size)
+        with ui.make_progress(console) as prog:
+            if need_fr:
+                t = prog.add_task("FR", total=100)
+                fr_tx = transcribe.transcribe_all(
+                    wav, model=model, task="transcribe", lang="fr",
+                    on_progress=lambda c, tot: prog.update(
+                        t, completed=min(100, 100 * c / tot)))
+                prog.update(t, completed=100)
+            if need_en:
+                t = prog.add_task("EN", total=100)
+                en_tx = transcribe.transcribe_all(
+                    wav, model=model, task="translate",
+                    on_progress=lambda c, tot: prog.update(
+                        t, completed=min(100, 100 * c / tot)))
+                prog.update(t, completed=100)
+    else:
+        ui.step(console, 5, 6, "Transcription… (ignorée)")
+
+    with console.status("[cyan]Détection des plans…[/]"):
+        cuts = scenes.scene_cuts(video)
+
+    # Bornes des passages
+    name_status = None
+    default_gap = {"chronique": 20.0, "reportage": 60.0, "jt": 300.0}[mode]
+    gap = merge_gap if merge_gap is not None else default_gap
+
+    if mode == "jt":
+        merged = segments.merge_segments(her, gap)
+        final = segments.snap_to_scenes(segments.pad_segments(merged, pad), cuts)
+    else:
+        blocks = segments.merge_segments(her, gap)
+        all_turns = launch.turns(diar)
+        final, validated_any = [], False
+        for bs, be in blocks:
+            s, e, validated = launch.build_span(
+                mode, all_turns, label, bs, be, cuts=cuts,
+                transcript=fr_tx, names=names, max_lookback=lookback,
+                launch_gap=launch_gap, precut_window=precut, end_trim=end_trim)
+            validated_any = validated_any or bool(validated)
+            final.append((s, e))
+        if names:
+            name_status = ("nom détecté au lancement ✓" if validated_any
+                           else "nom non vu (lancement pris quand même)")
+
+    final = segments.drop_short(final, min_len)
+    if not final:
+        raise click.ClickException("Aucun passage retenu après filtrage.")
+
+    total_kept = sum(e - s for s, e in final)
+    ui.detection_summary(console, mode, label, scores[label], thr,
+                         len(final), total_kept, name_status)
+
+    # Dossier propre au run, un sous-dossier par type
+    date = _guess_date(url)
+    run_dir = os.path.join(out, f"extract_{mode}_{date}")
+    dirs = {k: os.path.join(run_dir, k)
+            for k in ("passages", "audio", "srt", "screens", "mkv")}
+    for d in dirs.values():
+        os.makedirs(d, exist_ok=True)
+
+    def process(idx, seg):
+        s, e = seg
+        base = f"passage_{idx:02d}"
+        made = {}
+        made["mp4"] = cut.cut_one(
+            video, s, e, os.path.join(dirs["passages"], base + ".mp4"),
+            reencode=not fast)
+        made["audio"] = audio.extract_clip_audio(
+            video, s, e, os.path.join(dirs["audio"], base + ".m4a"))
+        subs = []
+        if fr_tx is not None:
+            from . import transcribe
+            subs.append((transcribe.clip_srt(
+                fr_tx, s, e, os.path.join(dirs["srt"], base + ".fr.srt")), "fre"))
+        if en_tx is not None:
+            from . import transcribe
+            subs.append((transcribe.clip_srt(
+                en_tx, s, e, os.path.join(dirs["srt"], base + ".en.srt")), "eng"))
+        if not no_screens:
+            screens.shots(video, s, e, dirs["screens"], base, n=shots_n)
+        if not no_mkv and subs:
+            mux.mux_mkv(made["mp4"], subs,
+                        os.path.join(dirs["mkv"], base + ".mkv"))
+        return base
+
+    ui.step(console, 6, 6,
+            f"Découpe + SRT + screens + MKV ({len(final)} passage(s), "
+            f"{max(1, workers)} en //)…")
+    done = []
+    with ui.make_progress(console) as prog:
+        task = prog.add_task("passages", total=len(final))
+        with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
+            futs = {ex.submit(process, i, seg): i
+                    for i, seg in enumerate(final, 1)}
+            for f in as_completed(futs):
+                done.append(f.result())
+                prog.update(task, advance=1)
+
+    console.print(f"\n[bold green]Terminé.[/] Tout est dans : [green]{run_dir}[/]")
+    console.print("  passages/  audio/  srt/ (FR+EN)  screens/ (9:16)  mkv/")
+
+
+@cli.command("enroll")
+@click.argument("samples", nargs=-1, required=True, type=click.Path(exists=True))
+@click.option("--out", default="voix_ref.npz")
+@click.option("--hf-token", default=None)
+def enroll_cmd(samples, out, hf_token):
+    """(Manuel) Force la création de l'empreinte. Un seul fichier = segment brut
+    (diarisation auto) ; plusieurs = extraits déjà propres."""
+    console = Console()
+    hf_token = _read_token(os.getcwd(), hf_token)
+    if hf_token:
+        os.environ["HF_TOKEN"] = hf_token
+    if len(samples) == 1:
+        _, thr, dur, _ = enroll.enroll_from_chronique(
+            samples[0], out, hf_token, diarize.diarize)
+        console.print(f"Empreinte -> {out} · {dur:.0f}s · seuil {thr:.2f}")
+    else:
+        _, thr, n = enroll.enroll_from_clean_samples(list(samples), out)
+        console.print(f"Empreinte -> {out} · {n} fenêtres · seuil {thr:.2f}")
+
+
+if __name__ == "__main__":
+    cli()

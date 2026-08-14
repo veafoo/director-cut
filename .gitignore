@@ -1,0 +1,30 @@
+# Secrets et données personnelles — ne doivent JAMAIS partir dans le dépôt
+.hf_token
+names.txt
+voix_ref.npz
+*.npz
+*.npy
+sample*
+samples/
+
+# Sorties
+sortie/
+_enroll.wav
+
+# Notes de travail internes
+BRIEF.md
+HANDOFF.md
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.coverage
+
+# OS
+.DS_Store

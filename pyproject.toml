@@ -1,0 +1,34 @@
+[project]
+name = "director-cut"
+version = "0.3.0"
+description = "Découpe automatique, par reconnaissance vocale, des passages d'un·e journaliste dans une vidéo (chronique, reportage, JT)"
+requires-python = ">=3.10"
+dependencies = [
+    "yt-dlp>=2024.0",
+    "pyannote.audio>=3.1",
+    "torch>=2.0",
+    "torchaudio>=2.0",
+    "scenedetect[opencv]>=0.6.4",
+    "faster-whisper>=1.0",
+    "soundfile>=0.12",
+    "numpy>=1.24",
+    "click>=8.1",
+    "rich>=13.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+director-cut = "director_cut.cli:cli"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["director_cut*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
