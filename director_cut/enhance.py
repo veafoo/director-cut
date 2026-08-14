@@ -77,12 +77,13 @@ def device():
 
 # --- effacement de l'habillage (LaMa) ------------------------------------
 
-def _lama():
-    if "lama" not in _cache:
-        m = torch.jit.load(download("lama"), map_location=device())
+def _lama(dev):
+    key = ("lama", str(dev))
+    if key not in _cache:
+        m = torch.jit.load(download("lama"), map_location=dev)
         m.eval()
-        _cache["lama"] = m
-    return _cache["lama"]
+        _cache[key] = m
+    return _cache[key]
 
 
 def _pad_to(x, mod=8):
@@ -93,18 +94,33 @@ def _pad_to(x, mod=8):
     return x, h, w
 
 
+def _erase_on(dev, rgb, mask):
+    img = torch.from_numpy(np.array(rgb, copy=True)).permute(2, 0, 1)[None]
+    img = img.float().div_(255).to(dev)
+    msk = torch.from_numpy(np.array(mask, copy=True))[None, None].float().to(dev)
+    img, h, w = _pad_to(img)
+    msk, _, _ = _pad_to(msk)
+    # TorchScript compile un graphe fusionné au bout de quelques exécutions, et
+    # ce fuser ne connaît pas MPS : "Unknown device for graph fuser". Les
+    # premières vignettes passent, le run casse ensuite. On reste en mode
+    # interprété, ce qui ne coûte rien de mesurable ici.
+    with _gpu, torch.jit.optimized_execution(False), torch.inference_mode():
+        out = _lama(dev)(img, (msk > 0).float())
+    out = out[0, :, :h, :w].permute(1, 2, 0).clamp(0, 1).mul(255)
+    return out.to(torch.uint8).cpu().numpy()
+
+
 def erase(rgb, mask):
     """Reconstruit le décor sous `mask`. rgb = HxWx3 uint8, mask = HxW bool."""
     dev = device()
-    img = torch.from_numpy(np.ascontiguousarray(rgb)).permute(2, 0, 1)[None]
-    img = img.float().div_(255).to(dev)
-    msk = torch.from_numpy(np.ascontiguousarray(mask))[None, None].float().to(dev)
-    img, h, w = _pad_to(img)
-    msk, _, _ = _pad_to(msk)
-    with _gpu, torch.inference_mode():
-        out = _lama()(img, (msk > 0).float())
-    out = out[0, :, :h, :w].permute(1, 2, 0).clamp(0, 1).mul(255)
-    return out.to(torch.uint8).cpu().numpy()
+    try:
+        return _erase_on(dev, rgb, mask)
+    except NotImplementedError:
+        if dev.type == "cpu":
+            raise
+        # Le GPU refuse ce graphe : on finit sur le CPU plutôt que de perdre
+        # le run. Plus lent, résultat identique.
+        return _erase_on(torch.device("cpu"), rgb, mask)
 
 
 # --- super-résolution (Real-ESRGAN / RRDBNet) ----------------------------

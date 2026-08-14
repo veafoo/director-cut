@@ -191,6 +191,33 @@ def test_the_intermediate_file_is_cleaned_up(retouche, ffmpeg, tmp_path, brand):
     assert not os.path.exists(out + ".enhanced.png")
 
 
+def test_a_failing_ai_pass_still_produces_a_thumbnail(ffmpeg, tmp_path, brand,
+                                                      monkeypatch):
+    """La retouche est un bonus ; perdre un run entier au dernier sixième
+    parce qu'une vignette a raté, non."""
+    def boom(*a, **k):
+        raise NotImplementedError("Unknown device for graph fuser")
+
+    monkeypatch.setattr(screens, "_grab_enhanced", boom)
+    with pytest.warns(RuntimeWarning, match="sans retouche"):
+        screens.grab_vertical("in.mp4", 5.0, str(tmp_path / "o.jpg"),
+                              brand=brand,
+                              enhance_opts={"clean": True, "sharpen": True})
+    # la vignette est bien rendue, par le chemin ffmpeg direct
+    assert _arg_after(ffmpeg[0], "-ss") == "5.000"
+
+
+def test_the_fallback_still_poses_the_logo(ffmpeg, tmp_path, brand,
+                                           monkeypatch):
+    monkeypatch.setattr(screens, "_grab_enhanced",
+                        lambda *a, **k: 1 / 0)
+    with pytest.warns(RuntimeWarning):
+        screens.grab_vertical("in.mp4", 5.0, str(tmp_path / "o.jpg"),
+                              brand=brand,
+                              enhance_opts={"clean": True, "sharpen": True})
+    assert "overlay=82:378" in _arg_after(ffmpeg[0], "-filter_complex")
+
+
 def test_without_options_the_ai_pass_is_skipped(ffmpeg, tmp_path, brand,
                                                 monkeypatch):
     monkeypatch.setattr(screens, "read_frame",

@@ -195,6 +195,52 @@ def test_stripping_removes_the_edge_bands_before_cropping(steps):
                                                                     abs=0.01)
 
 
+# --- robustesse GPU -------------------------------------------------------
+
+def test_a_gpu_that_refuses_the_graph_falls_back_to_the_cpu(monkeypatch):
+    """Le fuser TorchScript ne connaît pas MPS : il lève au bout de quelques
+    vignettes. Le run doit finir sur le CPU, pas s'arrêter."""
+    import torch
+    tried = []
+
+    def fake_erase_on(dev, rgb, mask):
+        tried.append(dev.type)
+        if dev.type != "cpu":
+            raise NotImplementedError("Unknown device for graph fuser")
+        return rgb
+
+    monkeypatch.setattr(enhance, "device", lambda: torch.device("mps"))
+    monkeypatch.setattr(enhance, "_erase_on", fake_erase_on)
+    out = enhance.erase(_frame(), np.ones(SHAPE[:2], bool))
+    assert tried == ["mps", "cpu"]
+    assert out.shape == SHAPE
+
+
+def test_the_same_failure_on_cpu_is_not_swallowed(monkeypatch):
+    import torch
+
+    def boom(dev, rgb, mask):
+        raise NotImplementedError("Unknown device for graph fuser")
+
+    monkeypatch.setattr(enhance, "device", lambda: torch.device("cpu"))
+    monkeypatch.setattr(enhance, "_erase_on", boom)
+    with pytest.raises(NotImplementedError):
+        enhance.erase(_frame(), np.ones(SHAPE[:2], bool))
+
+
+def test_each_device_gets_its_own_cached_model(monkeypatch):
+    import torch
+    loaded = []
+    monkeypatch.setattr(enhance, "download", lambda n: "/fake/big-lama.pt")
+    monkeypatch.setattr(enhance, "_cache", {})
+    monkeypatch.setattr(torch.jit, "load",
+                        lambda p, map_location: loaded.append(str(map_location))
+                        or type("M", (), {"eval": lambda s: None})())
+    enhance._lama(torch.device("cpu"))
+    enhance._lama(torch.device("cpu"))
+    assert loaded == ["cpu"]        # deuxième appel servi par le cache
+
+
 # --- modèles --------------------------------------------------------------
 
 def test_missing_lists_what_has_to_be_downloaded(monkeypatch):

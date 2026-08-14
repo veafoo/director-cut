@@ -13,6 +13,7 @@ Deux choses jouent sur la netteté, dans cet ordre d'importance :
 """
 import os
 import subprocess
+import warnings
 
 import numpy as np
 
@@ -148,10 +149,19 @@ def grab_vertical(video, t, out_img, brand=None, w=OUT_W, h=OUT_H,
     définition. Avec : la frame passe d'abord par l'effacement de l'habillage
     et la super-résolution, et ffmpeg ne fait plus que la mise à la taille
     finale et la pose du logo."""
-    if not enhance_opts:
-        _run(_render_cmd(video, out_img, brand, w, h, sharpen, seek=t))
-        return out_img
+    if enhance_opts:
+        try:
+            return _grab_enhanced(video, t, out_img, brand, w, h, enhance_opts)
+        except Exception as e:                      # noqa: BLE001
+            # La retouche est un bonus ; la découpe, non. Une vignette non
+            # retouchée vaut mieux qu'un run perdu au dernier sixième.
+            warnings.warn(f"retouche impossible sur cette vignette ({e}) : "
+                          "rendu sans retouche", RuntimeWarning)
+    _run(_render_cmd(video, out_img, brand, w, h, sharpen, seek=t))
+    return out_img
 
+
+def _grab_enhanced(video, t, out_img, brand, w, h, enhance_opts):
     from PIL import Image
 
     from . import enhance
