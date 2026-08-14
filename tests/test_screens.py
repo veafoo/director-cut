@@ -1,4 +1,5 @@
 """Vignettes 9:16 : géométrie du rendu et choix de l'instant le plus net."""
+import os
 import subprocess
 
 import numpy as np
@@ -13,6 +14,14 @@ def brand(tmp_path):
     d.mkdir()
     (d / "bfm_normandie.png").write_bytes(b"png")
     return brands.load("bfm_normandie", str(tmp_path))
+
+
+@pytest.fixture
+def brand_stripped(tmp_path):
+    d = tmp_path / "brands"
+    d.mkdir()
+    (d / "bfm_normandie.png").write_bytes(b"png")
+    return brands.load("bfm_normandie", str(tmp_path), strip=True)
 
 
 @pytest.fixture
@@ -99,6 +108,95 @@ def test_the_frame_is_taken_from_the_video_in_a_single_pass(brand, ffmpeg):
 def test_converting_an_existing_image_does_not_seek(brand, ffmpeg):
     screens.to_vertical("shot.png", "out.jpg", brand=brand)
     assert "-ss" not in ffmpeg[0]
+
+
+# --- passage par la retouche IA -------------------------------------------
+
+@pytest.fixture
+def retouche(monkeypatch):
+    """Court-circuite les modèles : on vérifie le branchement, pas les poids."""
+    from director_cut import enhance
+    calls = {}
+
+    def fake_prepare(rgb, **kw):
+        calls.update(kw)
+        calls["in_shape"] = rgb.shape
+        return np.zeros((1920, 1080, 3), np.uint8)
+
+    monkeypatch.setattr(screens, "read_frame",
+                        lambda v, t: np.zeros((720, 1280, 3), np.uint8))
+    monkeypatch.setattr(enhance, "prepare", fake_prepare)
+    return calls
+
+
+def test_the_ai_pass_gets_the_native_frame_not_a_thumbnail(retouche, ffmpeg,
+                                                           tmp_path, brand):
+    screens.grab_vertical("in.mp4", 5.0, str(tmp_path / "o.jpg"), brand=brand,
+                          enhance_opts={"clean": True, "sharpen": True})
+    assert retouche["in_shape"] == (720, 1280, 3)
+
+
+def test_the_brand_furniture_is_handed_to_the_ai_pass(retouche, ffmpeg,
+                                                      tmp_path, brand):
+    screens.grab_vertical("in.mp4", 5.0, str(tmp_path / "o.jpg"), brand=brand,
+                          enhance_opts={"clean": True, "sharpen": True})
+    assert retouche["boxes"] == brand.furniture
+
+
+def test_ffmpeg_does_not_crop_again_after_the_ai_pass(retouche, ffmpeg,
+                                                      tmp_path, brand_stripped):
+    # Le rognage des bandes est fait par la passe IA. Si ffmpeg le refaisait,
+    # on perdrait deux fois le haut et le bas de l'image.
+    screens.grab_vertical("in.mp4", 5.0, str(tmp_path / "o.jpg"),
+                          brand=brand_stripped,
+                          enhance_opts={"clean": True, "sharpen": True})
+    fc = _arg_after(ffmpeg[0], "-filter_complex")
+    assert not fc.startswith("[0:v]crop=iw:")
+
+
+def test_the_strip_is_handed_to_the_ai_pass(retouche, ffmpeg, tmp_path,
+                                            brand_stripped):
+    screens.grab_vertical("in.mp4", 5.0, str(tmp_path / "o.jpg"),
+                          brand=brand_stripped,
+                          enhance_opts={"clean": True, "sharpen": True})
+    assert retouche["strip_top"] == brand_stripped.strip_top
+    assert retouche["strip_bottom"] == brand_stripped.strip_bottom
+
+
+def test_ffmpeg_still_crops_the_bands_without_the_ai_pass(ffmpeg,
+                                                          brand_stripped):
+    screens.grab_vertical("in.mp4", 5.0, "o.jpg", brand=brand_stripped)
+    assert _arg_after(ffmpeg[0], "-filter_complex").startswith("[0:v]crop=iw:")
+
+
+def test_the_sharpening_is_toned_down_after_the_ai_pass(retouche, ffmpeg,
+                                                        tmp_path, brand):
+    screens.grab_vertical("in.mp4", 5.0, str(tmp_path / "o.jpg"), brand=brand,
+                          enhance_opts={"clean": True, "sharpen": True})
+    fc = _arg_after(ffmpeg[0], "-filter_complex")
+    assert f"unsharp=5:5:{screens.SHARPEN_ENHANCED}" in fc
+
+
+def test_the_logo_is_still_posed_after_the_ai_pass(retouche, ffmpeg, tmp_path,
+                                                   brand):
+    screens.grab_vertical("in.mp4", 5.0, str(tmp_path / "o.jpg"), brand=brand,
+                          enhance_opts={"clean": True, "sharpen": True})
+    assert "overlay=82:378" in _arg_after(ffmpeg[0], "-filter_complex")
+
+
+def test_the_intermediate_file_is_cleaned_up(retouche, ffmpeg, tmp_path, brand):
+    out = str(tmp_path / "o.jpg")
+    screens.grab_vertical("in.mp4", 5.0, out, brand=brand,
+                          enhance_opts={"clean": True, "sharpen": True})
+    assert not os.path.exists(out + ".enhanced.png")
+
+
+def test_without_options_the_ai_pass_is_skipped(ffmpeg, tmp_path, brand,
+                                                monkeypatch):
+    monkeypatch.setattr(screens, "read_frame",
+                        lambda *a: pytest.fail("aucune lecture de frame"))
+    screens.grab_vertical("in.mp4", 5.0, str(tmp_path / "o.jpg"), brand=brand)
+    assert _arg_after(ffmpeg[0], "-ss") == "5.000"
 
 
 # --- netteté --------------------------------------------------------------

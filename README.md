@@ -190,25 +190,67 @@ côté du logo :
 {"left": 0.0759, "top": 0.1969, "height": 0.1151}
 ```
 
-### Netteté
+### Retouche IA
 
-Deux choses jouent, dans cet ordre :
+Un replay porte l'habillage antenne : logo de la chaîne, horloge, météo,
+bandeau titre, bandeau déroulant, et le synthé qui nomme les interviewés. Un
+recadrage 9:16 tombe forcément dedans et ressort avec du texte coupé en plein
+mot. Le geste manuel — effacer ces éléments, puis retravailler la netteté —
+est industrialisé ici, en local :
 
-1. **Le choix de l'instant.** Une frame prise en plein mouvement est floue quoi
-   qu'on fasse. L'outil teste plusieurs frames autour de l'instant visé et garde
-   la plus nette (variance du laplacien).
-2. **La chaîne de rendu.** Recadrage sur la source en pleine définition,
-   rééchantillonnage Lanczos, puis masque flou pour compenser l'agrandissement.
-   Réglable avec `--sharpen` (0 pour couper).
+1. **Effacement.** Modèle LaMa (inpainting) : il *reconstruit le décor* derrière
+   le graphisme au lieu de le recouvrir.
+2. **Agrandissement.** La source est du 720p, la vignette du 1080×1920.
+   Real-ESRGAN reconstruit ×4, puis on redescend à la taille cible — une
+   réduction depuis une image sur-résolue est bien plus fine qu'un
+   agrandissement direct.
 
-### Habillage antenne
+```bash
+director-cut models     # une fois : télécharge les deux modèles (260 Mo)
+```
 
-Un replay porte le logo de la chaîne, l'horloge, la météo et le bandeau titres.
-Le recadrage 9:16 en coupe une partie, et le bandeau du bas ressort tronqué.
+Ensuite c'est automatique à chaque run. `--sans-retouche` pour couper. Si les
+modèles ne sont pas installés, la retouche est simplement ignorée : le reste du
+run continue.
 
-`--strip-furniture` sort ces bandes du cadre avant le recadrage : la vignette
-est propre, mais l'agrandissement est plus fort, donc l'image est moins fine.
-C'est un arbitrage à faire sur pièce, sujet par sujet.
+Rien ne sort de la machine : les deux modèles tournent en local, sur le torch
+déjà installé pour la diarisation. Aucune clé d'API, aucun coût par image, et
+un rendu reproductible. Compter ~13 s par vignette sur un Mac Apple Silicon.
+
+**Ce que l'IA invente.** L'effacement reconstruit des pixels qui n'ont jamais
+existé. Sur une zone entourée d'image réelle (le bandeau titre, le synthé) le
+résultat est fidèle. Sur une bande qui touche le bord de l'image, le modèle n'a
+de contexte que d'un côté et ça se voit — c'est pourquoi ces bandes-là sont
+sorties du cadre plutôt que reconstruites (`--strip-furniture`, actif par
+défaut avec la retouche puisque la super-résolution rattrape le zoom).
+
+### Déclarer l'habillage d'une autre chaîne
+
+L'emprise de chaque élément se déclare en fractions de l'image source, dans
+`brands/<chaîne>.json` :
+
+```json
+{"furniture": [
+  {"box": [0.0, 0.84, 1.0, 1.0]},
+  {"box": [0.651, 0.211, 0.906, 0.511], "color": [49, 49, 109], "cover": 0.10}
+]}
+```
+
+`box` = gauche, haut, droite, bas. Une boîte qui touche un bord doit aller
+**jusqu'au** bord : un liseré de graphisme oublié et le modèle recopie sa
+couleur sur toute la zone.
+
+`color` rend l'élément **conditionnel** : il n'est effacé que si cette couleur
+couvre au moins `cover` de la boîte. C'est indispensable pour les éléments
+intermittents comme le synthé d'interview — sans ça, on effacerait de la vraie
+image chaque fois qu'il n'est pas à l'antenne.
+
+### Netteté du choix de frame
+
+Indépendamment de l'IA : une frame prise en plein mouvement est floue quoi
+qu'on fasse derrière. L'outil teste plusieurs frames autour de l'instant visé et
+garde la plus nette (variance du laplacien). `--sharpen` règle le masque flou
+final (0 pour couper).
 
 ---
 
@@ -226,7 +268,8 @@ C'est un arbitrage à faire sur pièce, sujet par sujet.
 | `--shots N` | Screenshots 9:16 par passage (défaut 4). |
 | `--brand NOM` | Gabarit de vignette (`brands/NOM.png`). Auto s'il n'y en a qu'un. |
 | `--sharpen X` | Force du masque flou sur les vignettes (défaut 0.8, 0 = coupé). |
-| `--strip-furniture` | Sort le bandeau et l'habillage antenne du cadre. |
+| `--sans-retouche` | Coupe la retouche IA des vignettes. |
+| `--strip-furniture` / `--no-strip-furniture` | Force le rognage des bandes d'habillage (défaut : actif avec la retouche). |
 | `--no-screens` / `--no-mkv` / `--no-transcript` | Désactive une sortie. |
 | `--workers N` | Tâches en parallèle (défaut 3). |
 | `--name X` | Variante de nom en plus de `names.txt` (répétable). |
@@ -234,9 +277,12 @@ C'est un arbitrage à faire sur pièce, sujet par sujet.
 | `--out DOSSIER` | Dossier de sortie racine (défaut `sortie`). |
 | `--ref FICHIER` | Emplacement de l'empreinte vocale (défaut `voix_ref.npz`). |
 
-Commande annexe : `director-cut enroll <fichier…>` force la reconstruction de
-l'empreinte vocale (un fichier = extrait brut multi-voix, plusieurs = extraits
-déjà propres).
+Commandes annexes :
+
+- `director-cut models` — télécharge une fois les modèles de retouche.
+- `director-cut enroll <fichier…>` — force la reconstruction de l'empreinte
+  vocale (un fichier = extrait brut multi-voix, plusieurs = extraits déjà
+  propres).
 
 ---
 

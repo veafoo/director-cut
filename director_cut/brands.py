@@ -40,7 +40,50 @@ STRIPS = {
     "bfmtv":         {"strip_top": 0.139, "strip_bottom": 0.243},
 }
 
+# Emprise exacte de chaque élément d'habillage, en fractions de la frame source
+# (gauche, haut, droite, bas). Sert de masque à l'effacement IA, qui reconstruit
+# le décor derrière — d'où des boîtes serrées plutôt que des bandes entières.
+#
+# Une boîte qui touche un bord de l'image doit aller JUSQU'AU bord : un liseré
+# de graphisme oublié et le modèle recopie sa couleur sur toute la zone.
+#
+# Un élément qui n'est pas toujours à l'antenne (le synthé qui nomme un
+# interviewé, par exemple) porte une `color` : il n'est effacé que si cette
+# couleur couvre au moins `cover` de la boîte. Sans ça, on effacerait de la
+# vraie image chaque fois que le synthé est absent.
+#
+# Relevé sur BFM Normandie. Pour une autre chaîne, poser les valeurs dans
+# brands/<nom>.json sous la clé "furniture".
+FURNITURE = {
+    "bfm_normandie": [
+        {"box": (0.0,    0.0,   0.2266, 0.1417)},  # logo chaîne + horloge
+        {"box": (0.8047, 0.0,   1.0,    0.1528)},  # météo
+        {"box": (0.043,  0.750, 0.8398, 0.8639)},  # bandeau titre
+        {"box": (0.0,    0.840, 1.0,    1.0)},     # bandeau déroulant
+        # synthé d'interview (nom, âge, commune) : intermittent
+        {"box": (0.651, 0.211, 0.906, 0.511),
+         "color": (49, 49, 109), "cover": 0.10},
+    ],
+}
+
 BRANDS_DIR = "brands"
+
+
+@dataclass(frozen=True)
+class Furniture:
+    """Un élément d'habillage. box = (gauche, haut, droite, bas) en fractions
+    de la frame source. color/cover : voir FURNITURE."""
+    box: tuple
+    color: tuple = None
+    cover: float = 0.10
+
+    @classmethod
+    def parse(cls, item):
+        if isinstance(item, dict):
+            return cls(box=tuple(item["box"]),
+                       color=tuple(item["color"]) if item.get("color") else None,
+                       cover=float(item.get("cover", 0.10)))
+        return cls(box=tuple(item))
 
 
 @dataclass(frozen=True)
@@ -52,6 +95,7 @@ class Brand:
     height: float
     strip_top: float = 0.0
     strip_bottom: float = 0.0
+    furniture: tuple = ()
 
     def box(self, w=OUT_W, h=OUT_H):
         """(x, y, hauteur) en pixels pour une sortie w x h."""
@@ -89,10 +133,12 @@ def load(name, workdir=".", strip=False):
     if os.path.exists(override):
         with open(override, encoding="utf-8") as f:
             place.update(json.load(f))
+    furniture = place.get("furniture", FURNITURE.get(name, ()))
     return Brand(name=name, logo=logo, left=place["left"], top=place["top"],
                  height=place["height"],
                  strip_top=place.get("strip_top", 0.0),
-                 strip_bottom=place.get("strip_bottom", 0.0))
+                 strip_bottom=place.get("strip_bottom", 0.0),
+                 furniture=tuple(Furniture.parse(f) for f in furniture))
 
 
 def auto(name, workdir=".", strip=False):

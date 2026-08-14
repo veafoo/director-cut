@@ -97,6 +97,43 @@ def test_strip_on_a_channel_without_measurements_changes_nothing(workdir):
     assert brands.load("tf1", workdir, strip=True).strip_top == 0.0
 
 
+# --- habillage à effacer --------------------------------------------------
+
+def test_the_measured_furniture_comes_with_the_brand(workdir):
+    items = brands.load("bfm_normandie", workdir).furniture
+    assert len(items) >= 4
+    assert all(len(f.box) == 4 for f in items)
+
+
+def test_an_intermittent_element_carries_its_detection_colour(workdir):
+    items = brands.load("bfm_normandie", workdir).furniture
+    conditional = [f for f in items if f.color]
+    assert len(conditional) == 1          # le synthé d'interview
+    assert 0 < conditional[0].cover < 1
+
+
+def test_a_channel_without_measurements_has_no_furniture(workdir):
+    assert brands.load("tf1", workdir).furniture == ()
+
+
+def test_furniture_can_be_declared_in_the_json(workdir, tmp_path):
+    (tmp_path / "brands" / "tf1.json").write_text(json.dumps(
+        {"furniture": [{"box": [0, 0.9, 1, 1]},
+                       {"box": [0.6, 0.2, 0.9, 0.5], "color": [10, 20, 30],
+                        "cover": 0.25}]}))
+    items = brands.load("tf1", workdir).furniture
+    assert items[0].box == (0, 0.9, 1, 1)
+    assert items[0].color is None
+    assert items[1].color == (10, 20, 30)
+    assert items[1].cover == 0.25
+
+
+def test_a_plain_four_number_box_is_accepted(workdir, tmp_path):
+    (tmp_path / "brands" / "tf1.json").write_text(
+        json.dumps({"furniture": [[0, 0.9, 1, 1]]}))
+    assert brands.load("tf1", workdir).furniture[0].box == (0, 0.9, 1, 1)
+
+
 # --- choix automatique ----------------------------------------------------
 
 def test_a_single_logo_is_picked_without_asking(tmp_path):

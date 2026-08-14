@@ -20,6 +20,8 @@ from .brands import OUT_H, OUT_W
 
 # Force du masque flou. Au-delà de ~1.2 les contours deviennent cartonneux.
 SHARPEN = 0.8
+# Après retouche IA l'image est déjà nette : un masque flou fort la cartonne.
+SHARPEN_ENHANCED = 0.2
 # Fenêtre (s) et nombre de frames candidates pour le choix de l'instant.
 PICK_WINDOW = 0.6
 PICK_CANDIDATES = 5
@@ -30,6 +32,22 @@ def _run(cmd):
 
 
 # --- choix de l'instant le plus net --------------------------------------
+
+def read_frame(video, t):
+    """Frame de la vidéo à l'instant t, en numpy RGB à la définition native."""
+    size = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0",
+         "-show_entries", "stream=width,height", "-of", "csv=p=0:s=x", video],
+        check=True, capture_output=True).stdout.decode().strip().split("x")
+    w, h = int(size[0]), int(size[1])
+    raw = subprocess.run(
+        ["ffmpeg", "-y", "-v", "error", "-ss", f"{t:.3f}", "-i", video,
+         "-frames:v", "1", "-pix_fmt", "rgb24", "-f", "rawvideo", "-"],
+        check=True, capture_output=True).stdout
+    if len(raw) < w * h * 3:
+        raise RuntimeError(f"frame illisible à {t:.2f}s dans {video}")
+    return np.frombuffer(raw[:w * h * 3], np.uint8).reshape(h, w, 3)
+
 
 def _gray_frame(video, t, size=192):
     """Rend une mini-image en niveaux de gris (numpy 2D) pour la mesure."""
@@ -95,14 +113,15 @@ def vertical_chain(w=OUT_W, h=OUT_H, sharpen=SHARPEN, strip_top=0.0,
     return chain
 
 
-def _render_cmd(inputs, out_img, brand, w, h, sharpen, seek=None):
+def _render_cmd(inputs, out_img, brand, w, h, sharpen, seek=None, strip=True):
     cmd = ["ffmpeg", "-y", "-v", "error"]
     if seek is not None:
         cmd += ["-ss", f"{seek:.3f}"]
     cmd += ["-i", inputs]
-    chain = vertical_chain(w, h, sharpen,
-                           strip_top=getattr(brand, "strip_top", 0.0),
-                           strip_bottom=getattr(brand, "strip_bottom", 0.0))
+    chain = vertical_chain(
+        w, h, sharpen,
+        strip_top=getattr(brand, "strip_top", 0.0) if strip else 0.0,
+        strip_bottom=getattr(brand, "strip_bottom", 0.0) if strip else 0.0)
     if brand is None:
         cmd += ["-vf", chain]
     else:
@@ -122,17 +141,41 @@ def to_vertical(in_img, out_img, brand=None, w=OUT_W, h=OUT_H, sharpen=SHARPEN):
 
 
 def grab_vertical(video, t, out_img, brand=None, w=OUT_W, h=OUT_H,
-                  sharpen=SHARPEN):
-    """Capture l'instant t d'une vidéo directement en vignette 9:16.
+                  sharpen=SHARPEN, enhance_opts=None):
+    """Capture l'instant t d'une vidéo en vignette 9:16.
 
-    Un seul passage ffmpeg : on recadre sur la source pleine définition, pas
-    sur une capture déjà réduite."""
-    _run(_render_cmd(video, out_img, brand, w, h, sharpen, seek=t))
+    Sans retouche IA : un seul passage ffmpeg, on recadre sur la source pleine
+    définition. Avec : la frame passe d'abord par l'effacement de l'habillage
+    et la super-résolution, et ffmpeg ne fait plus que la mise à la taille
+    finale et la pose du logo."""
+    if not enhance_opts:
+        _run(_render_cmd(video, out_img, brand, w, h, sharpen, seek=t))
+        return out_img
+
+    from PIL import Image
+
+    from . import enhance
+    frame = enhance.prepare(read_frame(video, t),
+                            boxes=getattr(brand, "furniture", ()),
+                            strip_top=getattr(brand, "strip_top", 0.0),
+                            strip_bottom=getattr(brand, "strip_bottom", 0.0),
+                            out_w=w, out_h=h, **enhance_opts)
+    tmp = out_img + ".enhanced.png"
+    try:
+        Image.fromarray(frame).save(tmp)
+        # L'image est déjà recadrée, détourée et nette : ffmpeg ne fait plus
+        # que la mise à la taille finale et la pose du logo.
+        _run(_render_cmd(tmp, out_img, brand, w, h, SHARPEN_ENHANCED,
+                         strip=False))
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
     return out_img
 
 
 def shots(video, start, end, out_dir, prefix, n=4, brand=None,
-          window=PICK_WINDOW, candidates=PICK_CANDIDATES, sharpen=SHARPEN):
+          window=PICK_WINDOW, candidates=PICK_CANDIDATES, sharpen=SHARPEN,
+          enhance_opts=None):
     """N vignettes 9:16 réparties dans [start, end], chacune prise sur la frame
     la plus nette de son voisinage."""
     os.makedirs(out_dir, exist_ok=True)
@@ -144,6 +187,7 @@ def shots(video, start, end, out_dir, prefix, n=4, brand=None,
         t = start + dur * (i + 1) / (n + 1)
         t = best_time(video, t, window=window, candidates=candidates)
         fin = os.path.join(out_dir, f"{prefix}_{i + 1:02d}.jpg")
-        grab_vertical(video, t, fin, brand=brand, sharpen=sharpen)
+        grab_vertical(video, t, fin, brand=brand, sharpen=sharpen,
+                      enhance_opts=enhance_opts)
         out.append(fin)
     return out

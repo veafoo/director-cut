@@ -86,6 +86,27 @@ def _ensure_reference(console, ref, workdir, hf_token):
                          f"seuil auto-calibré {thr:.2f}")
 
 
+def _retouche_opts(console, template):
+    """Ce que la retouche IA peut faire ici, vu les modèles installés.
+
+    Rien n'est bloquant : un modèle absent désactive juste l'étape concernée,
+    avec un message. La découpe, elle, doit aboutir dans tous les cas."""
+    from . import enhance
+
+    clean = bool(template and template.furniture)
+    if template and not template.furniture:
+        ui.info(console, f"pas d'habillage relevé pour {template.name} : "
+                         "bandeau non effacé (voir README, clé 'furniture')")
+    absents = enhance.missing(clean=clean, sharpen=True)
+    if absents:
+        ui.info(console, f"retouche IA ignorée, modèle(s) manquant(s) : "
+                         f"{', '.join(absents)} — lance 'director-cut models'")
+        return None
+    if not clean:
+        return {"clean": False, "sharpen": True}
+    return {"clean": True, "sharpen": True}
+
+
 @click.group()
 def cli():
     """Découpe les passages d'une personne dans une vidéo, par sa voix."""
@@ -126,9 +147,14 @@ def cli():
                    "Défaut: le seul logo présent dans brands/.")
 @click.option("--sharpen", default=screens.SHARPEN, type=float,
               help="Force du masque flou sur les vignettes (0 = désactivé).")
-@click.option("--strip-furniture", is_flag=True,
-              help="Sort l'habillage antenne (bandeau, horloge, météo) du "
-                   "cadre des vignettes. Image plus propre, moins fine.")
+@click.option("--strip-furniture/--no-strip-furniture", default=None,
+              help="Sort du cadre les bandes d'habillage qui touchent un bord. "
+                   "Actif par défaut avec la retouche IA (la super-résolution "
+                   "rattrape le zoom), inactif sans elle.")
+@click.option("--retouche/--sans-retouche", "retouche", default=True,
+              help="Retouche IA des vignettes : efface le bandeau et agrandit "
+                   "proprement. Ignorée si les modèles ne sont pas installés "
+                   "(director-cut models).")
 @click.option("--no-screens", is_flag=True, help="Pas de screenshots.")
 @click.option("--no-mkv", is_flag=True, help="Pas de MKV sous-titré.")
 @click.option("--no-transcript", is_flag=True, help="Pas de sous-titres (ni FR ni EN).")
@@ -137,8 +163,8 @@ def cli():
 @click.option("--hf-token", default=None, help="Défaut: .hf_token ou HF_TOKEN.")
 def run_cmd(url, mode, merge_gap, out, ref, names, threshold, num_speakers, pad,
             min_len, lookback, launch_gap, precut, end_trim, fast, shots_n,
-            brand, sharpen, strip_furniture, no_screens, no_mkv, no_transcript,
-            whisper_size, workers, hf_token):
+            brand, sharpen, strip_furniture, retouche, no_screens, no_mkv,
+            no_transcript, whisper_size, workers, hf_token):
     """Traite une URL ou un fichier vidéo local et découpe les passages.
 
     Usage : director-cut run "URL"   ou   director-cut run "/chemin/vers/video.mp4" """
@@ -153,9 +179,12 @@ def run_cmd(url, mode, merge_gap, out, ref, names, threshold, num_speakers, pad,
     os.makedirs(out, exist_ok=True)
 
     template = None
+    enhance_opts = None
     if not no_screens:
         try:
-            template = brands.auto(brand, workdir, strip=strip_furniture)
+            # On charge une première fois pour savoir ce que la retouche peut
+            # faire, puis on tranche le rognage en fonction.
+            template = brands.auto(brand, workdir)
         except ValueError as e:
             raise click.ClickException(str(e))
         if template:
@@ -163,6 +192,12 @@ def run_cmd(url, mode, merge_gap, out, ref, names, threshold, num_speakers, pad,
         elif brands.available(workdir):
             ui.info(console, "vignettes sans logo (plusieurs gabarits "
                              "disponibles, précise --brand)")
+        if retouche:
+            enhance_opts = _retouche_opts(console, template)
+        strip = enhance_opts is not None if strip_furniture is None \
+            else strip_furniture
+        if strip and template:
+            template = brands.auto(brand, workdir, strip=True)
 
     _ensure_reference(console, ref, workdir, hf_token)
 
@@ -274,7 +309,8 @@ def run_cmd(url, mode, merge_gap, out, ref, names, threshold, num_speakers, pad,
                 en_tx, s, e, os.path.join(dirs["srt"], base + ".en.srt")), "eng"))
         if not no_screens:
             screens.shots(video, s, e, dirs["screens"], base, n=shots_n,
-                          brand=template, sharpen=sharpen)
+                          brand=template, sharpen=sharpen,
+                          enhance_opts=enhance_opts)
         if not no_mkv and subs:
             mux.mux_mkv(made["mp4"], subs,
                         os.path.join(dirs["mkv"], base + ".mkv"))
@@ -315,6 +351,23 @@ def enroll_cmd(samples, out, hf_token):
     else:
         _, thr, n = enroll.enroll_from_clean_samples(list(samples), out)
         console.print(f"Empreinte -> {out} · {n} fenêtres · seuil {thr:.2f}")
+
+
+@cli.command("models")
+def models_cmd():
+    """Télécharge une fois pour toutes les modèles de retouche des vignettes."""
+    from . import enhance
+
+    console = Console()
+    for name in enhance.MODELS:
+        if enhance.is_ready(name):
+            console.print(f"[green]✓[/] {name} déjà installé")
+            continue
+        console.print(f"[cyan]»[/] téléchargement de {name}…")
+        enhance.download(name)
+        console.print(f"[green]✓[/] {name}")
+    console.print(f"\nModèles dans [green]{enhance.CACHE}[/]. "
+                  "Plus aucun appel réseau ensuite.")
 
 
 if __name__ == "__main__":
