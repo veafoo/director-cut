@@ -5,7 +5,7 @@ import subprocess
 import numpy as np
 import pytest
 
-from director_cut import brands, screens
+from director_cut import brands, ff, screens
 
 
 @pytest.fixture
@@ -273,7 +273,7 @@ def test_best_time_falls_back_on_the_requested_instant(monkeypatch):
 
 def test_best_time_survives_a_frame_ffmpeg_cannot_decode(monkeypatch):
     def boom(video, t, size=192):
-        raise subprocess.CalledProcessError(1, "ffmpeg")
+        raise ff.FFmpegError(["ffmpeg"], 1, "Error while decoding stream")
 
     monkeypatch.setattr(screens, "_gray_frame", boom)
     assert screens.best_time("in.mp4", 42.0) == 42.0

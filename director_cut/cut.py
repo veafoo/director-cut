@@ -1,5 +1,6 @@
 import os
-import subprocess
+
+from . import ff
 
 
 def _fmt(t):
@@ -29,7 +30,7 @@ def cut_segments(video_path, segments, out_dir, prefix="passage",
                 "-t", _fmt(e - s),
                 "-c", "copy", out,
             ]
-        subprocess.run(cmd, check=True, capture_output=True)
+        ff.run(cmd)
         clips.append(out)
         if on_progress:
             on_progress(i, len(segments))
@@ -40,11 +41,8 @@ def cut_segments(video_path, segments, out_dir, prefix="passage",
             for c in clips:
                 f.write(f"file '{os.path.abspath(c)}'\n")
         final = os.path.join(out_dir, f"{prefix}_complet.mp4")
-        subprocess.run(
-            ["ffmpeg", "-y", "-f", "concat", "-safe", "0",
-             "-i", listfile, "-c", "copy", final],
-            check=True, capture_output=True,
-        )
+        ff.run(["ffmpeg", "-y", "-f", "concat", "-safe", "0",
+                "-i", listfile, "-c", "copy", final])
         clips.append(final)
     return clips
 
@@ -58,5 +56,5 @@ def cut_one(video_path, start, end, out_path, reencode=True):
     else:
         cmd = ["ffmpeg", "-y", "-ss", _fmt(start), "-i", video_path,
                "-t", _fmt(end - start), "-c", "copy", out_path]
-    subprocess.run(cmd, check=True, capture_output=True)
+    ff.run(cmd)
     return out_path

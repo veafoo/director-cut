@@ -4,20 +4,19 @@ import subprocess
 
 import pytest
 
-from director_cut import audio, cut, mux, scenes
+from director_cut import audio, cut, ff, mux, scenes
 
 
 @pytest.fixture
 def ffmpeg(monkeypatch):
-    """Capture les appels subprocess de tous les modules média."""
+    """Capture les commandes ffmpeg de tous les modules média."""
     calls = []
 
-    def fake_run(cmd, *args, **kwargs):
+    def fake_run(cmd):
         calls.append(cmd)
         return subprocess.CompletedProcess(cmd, 0, b"", b"")
 
-    for mod in (audio, cut, mux):
-        monkeypatch.setattr(mod.subprocess, "run", fake_run)
+    monkeypatch.setattr(ff, "run", fake_run)
     return calls
 
 
@@ -95,18 +94,10 @@ def test_mux_mkv_maps_every_subtitle_track_with_its_language(ffmpeg):
     assert _arg_after(cmd, "-c:s") == "srt"
 
 
-def test_mux_mkv_tolerates_a_video_without_audio():
+def test_mux_mkv_tolerates_a_video_without_audio(ffmpeg):
     # -map 0:a:0? : le "?" rend la piste audio optionnelle
-    calls = []
-    import director_cut.mux as m
-    original = m.subprocess.run
-    try:
-        m.subprocess.run = lambda cmd, **k: (calls.append(cmd),
-                                             subprocess.CompletedProcess(cmd, 0))[1]
-        m.mux_mkv("p.mp4", [("p.fr.srt", "fre")], "p.mkv")
-    finally:
-        m.subprocess.run = original
-    assert "0:a:0?" in calls[0]
+    mux.mux_mkv("p.mp4", [("p.fr.srt", "fre")], "p.mkv")
+    assert "0:a:0?" in ffmpeg[0]
 
 
 # --- détection de plans ---------------------------------------------------

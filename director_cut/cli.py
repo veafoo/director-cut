@@ -7,7 +7,7 @@ import click
 from rich.console import Console
 
 from . import (audio, brands, cut, diarize, download, enroll, identify, launch,
-               mux, scenes, screens, segments, ui)
+               lock, mux, scenes, screens, segments, ui)
 
 SAMPLE_EXTS = (".mp4", ".mkv", ".webm", ".mov", ".mp3", ".m4a", ".aac",
                ".flac", ".wav")
@@ -171,6 +171,22 @@ def run_cmd(url, mode, merge_gap, out, ref, names, threshold, num_speakers, pad,
     console = Console()
     ui.splash(console)
 
+    os.makedirs(out, exist_ok=True)
+    try:
+        with lock.Lock(out):
+            _run(console, url, mode, merge_gap, out, ref, names, threshold,
+                 num_speakers, pad, min_len, lookback, launch_gap, precut,
+                 end_trim, fast, shots_n, brand, sharpen, strip_furniture,
+                 retouche, no_screens, no_mkv, no_transcript, whisper_size,
+                 workers, hf_token)
+    except lock.Busy as e:
+        raise click.ClickException(str(e))
+
+
+def _run(console, url, mode, merge_gap, out, ref, names, threshold,
+         num_speakers, pad, min_len, lookback, launch_gap, precut, end_trim,
+         fast, shots_n, brand, sharpen, strip_furniture, retouche, no_screens,
+         no_mkv, no_transcript, whisper_size, workers, hf_token):
     workdir = os.getcwd()
     hf_token = _read_token(workdir, hf_token)
     if hf_token:
@@ -316,20 +332,39 @@ def run_cmd(url, mode, merge_gap, out, ref, names, threshold, num_speakers, pad,
                         os.path.join(dirs["mkv"], base + ".mkv"))
         return base
 
+    if not os.path.exists(video):
+        raise click.ClickException(
+            f"La vidéo source a disparu pendant le run ({video}). "
+            "Relance la commande : elle sera retéléchargée.")
+
     ui.step(console, 6, 6,
             f"Découpe + SRT + screens + MKV ({len(final)} passage(s), "
             f"{max(1, workers)} en //)…")
-    done = []
+    done, failed = [], []
     with ui.make_progress(console) as prog:
         task = prog.add_task("passages", total=len(final))
         with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
             futs = {ex.submit(process, i, seg): i
                     for i, seg in enumerate(final, 1)}
             for f in as_completed(futs):
-                done.append(f.result())
+                try:
+                    done.append(f.result())
+                except Exception as e:               # noqa: BLE001
+                    # Un passage qui rate ne doit pas emporter les autres :
+                    # on va au bout et on dit lesquels sont sortis.
+                    failed.append((futs[f], e))
                 prog.update(task, advance=1)
 
-    console.print(f"\n[bold green]Terminé.[/] Tout est dans : [green]{run_dir}[/]")
+    for idx, err in sorted(failed):
+        ui.info(console, f"[red]passage_{idx:02d} non produit[/] : {err}")
+    if not done:
+        raise click.ClickException(
+            "Aucun passage n'a pu être produit. La cause est au-dessus ; si "
+            "c'est un fichier introuvable, la vidéo source a disparu en cours "
+            "de route — relance, elle sera retéléchargée.")
+
+    console.print(f"\n[bold green]Terminé.[/] "
+                  f"{len(done)}/{len(final)} passage(s) dans : [green]{run_dir}[/]")
     console.print("  passages/  audio/  srt/ (FR+EN)  screens/ (9:16)  mkv/")
 
 

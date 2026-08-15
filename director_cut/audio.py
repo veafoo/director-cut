@@ -1,4 +1,4 @@
-import subprocess
+from . import ff
 
 
 def extract_wav(video_path, out_path, sr=16000):
@@ -11,13 +11,12 @@ def extract_wav(video_path, out_path, sr=16000):
         "-vn",
         out_path,
     ]
-    subprocess.run(cmd, check=True, capture_output=True)
+    ff.run(cmd)
     return out_path
 
 
 def extract_clip_audio(video_path, start, end, out_path):
     """Extrait l'audio d'un passage en m4a (aac)."""
-    subprocess.run(["ffmpeg", "-y", "-ss", f"{start:.3f}", "-i", video_path,
-                    "-t", f"{end - start:.3f}", "-vn", "-c:a", "aac", out_path],
-                   check=True, capture_output=True)
+    ff.run(["ffmpeg", "-y", "-ss", f"{start:.3f}", "-i", video_path,
+            "-t", f"{end - start:.3f}", "-vn", "-c:a", "aac", out_path])
     return out_path

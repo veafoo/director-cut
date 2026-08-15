@@ -12,11 +12,11 @@ Deux choses jouent sur la netteté, dans cet ordre d'importance :
    puis masque flou (unsharp) pour compenser l'agrandissement.
 """
 import os
-import subprocess
 import warnings
 
 import numpy as np
 
+from . import ff
 from .brands import OUT_H, OUT_W
 
 # Force du masque flou. Au-delà de ~1.2 les contours deviennent cartonneux.
@@ -29,22 +29,21 @@ PICK_CANDIDATES = 5
 
 
 def _run(cmd):
-    subprocess.run(cmd, check=True, capture_output=True)
+    ff.run(cmd)
 
 
 # --- choix de l'instant le plus net --------------------------------------
 
 def read_frame(video, t):
     """Frame de la vidéo à l'instant t, en numpy RGB à la définition native."""
-    size = subprocess.run(
+    size = ff.capture(
         ["ffprobe", "-v", "error", "-select_streams", "v:0",
-         "-show_entries", "stream=width,height", "-of", "csv=p=0:s=x", video],
-        check=True, capture_output=True).stdout.decode().strip().split("x")
+         "-show_entries", "stream=width,height", "-of", "csv=p=0:s=x", video]
+    ).decode().strip().split("x")
     w, h = int(size[0]), int(size[1])
-    raw = subprocess.run(
+    raw = ff.capture(
         ["ffmpeg", "-y", "-v", "error", "-ss", f"{t:.3f}", "-i", video,
-         "-frames:v", "1", "-pix_fmt", "rgb24", "-f", "rawvideo", "-"],
-        check=True, capture_output=True).stdout
+         "-frames:v", "1", "-pix_fmt", "rgb24", "-f", "rawvideo", "-"])
     if len(raw) < w * h * 3:
         raise RuntimeError(f"frame illisible à {t:.2f}s dans {video}")
     return np.frombuffer(raw[:w * h * 3], np.uint8).reshape(h, w, 3)
@@ -52,11 +51,10 @@ def read_frame(video, t):
 
 def _gray_frame(video, t, size=192):
     """Rend une mini-image en niveaux de gris (numpy 2D) pour la mesure."""
-    out = subprocess.run(
+    out = ff.capture(
         ["ffmpeg", "-y", "-v", "error", "-ss", f"{t:.3f}", "-i", video,
          "-frames:v", "1", "-vf", f"scale={size}:{size}",
-         "-pix_fmt", "gray", "-f", "rawvideo", "-"],
-        check=True, capture_output=True).stdout
+         "-pix_fmt", "gray", "-f", "rawvideo", "-"])
     if len(out) < size * size:
         return None
     return np.frombuffer(out[:size * size], np.uint8).reshape(size, size)
@@ -81,7 +79,7 @@ def best_time(video, t, window=PICK_WINDOW, candidates=PICK_CANDIDATES):
         c = max(0.0, t - window / 2 + i * step)
         try:
             img = _gray_frame(video, c)
-        except subprocess.CalledProcessError:
+        except ff.FFmpegError:
             continue
         if img is None:
             continue

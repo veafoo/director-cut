@@ -1,4 +1,4 @@
-import subprocess
+from . import ff
 
 
 def mux_mkv(video_mp4, subs, out_mkv):
@@ -14,5 +14,5 @@ def mux_mkv(video_mp4, subs, out_mkv):
     for i, (_, lang) in enumerate(subs):
         cmd += [f"-metadata:s:s:{i}", f"language={lang}"]
     cmd += [out_mkv]
-    subprocess.run(cmd, check=True, capture_output=True)
+    ff.run(cmd)
     return out_mkv
