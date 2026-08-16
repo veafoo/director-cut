@@ -168,3 +168,35 @@ def test_run_help_lists_the_three_modes():
 
 def test_run_requires_a_source():
     assert CliRunner().invoke(cli.cli, ["run"]).exit_code != 0
+
+
+# --- les vignettes sont une option, pas un défaut -------------------------
+
+def test_thumbnails_are_off_by_default():
+    result = CliRunner().invoke(cli.cli, ["run", "--help"])
+    assert "--screens / --no-screens" in result.output
+
+
+def test_only_the_produced_folders_are_created(tmp_path):
+    """Un dossier vide laisse croire que la sortie a échoué."""
+    kinds = ["passages", "audio"]
+    for no_transcript, screens_on, no_mkv, attendu in (
+            (False, False, False, {"passages", "audio", "srt", "mkv"}),
+            (False, True, False, {"passages", "audio", "srt", "screens", "mkv"}),
+            (True, False, True, {"passages", "audio"}),
+            (True, True, True, {"passages", "audio", "screens"})):
+        k = list(kinds)
+        if not no_transcript:
+            k.append("srt")
+        if screens_on:
+            k.append("screens")
+        if not no_mkv and not no_transcript:
+            k.append("mkv")
+        assert set(k) == attendu
+
+
+def test_thumbnails_need_an_explicit_flag():
+    # Sans --screens : pas de vignettes, donc aucun modèle IA chargé.
+    param = next(p for p in cli.run_cmd.params if p.name == "screens_on")
+    assert param.default is False
+    assert "--screens" in param.opts and "--no-screens" in param.secondary_opts

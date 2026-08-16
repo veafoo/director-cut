@@ -2,44 +2,21 @@ import difflib
 import unicodedata
 
 
-# Tournures par lesquelles un présentateur lance un sujet. Volontairement
-# courtes et sans accent : la comparaison se fait sur du texte aplati.
-# Rester serré : une tournure trop vague accroche une phrase de météo ou de
-# titre et fait démarrer le passage bien avant le lancement.
-LAUNCH_CUES = (
-    "reportage", "vous allez le voir", "regardez", "on y va", "c est parti",
-    "sur place", "explications", "on vous emmene", "le sujet de",
-)
+# Amorce avant le début du lancement. Les horodatages sont approximatifs :
+# démarrer pile dessus rogne la première syllabe. On ne mord jamais plus que
+# MARGIN sur la phrase d'avant, dont la fin est de toute façon du silence.
+LEAD_IN = 0.4
+MARGIN = 0.15
 
-# Un changement de plan n'est retenu pour caler le début que s'il colle à la
-# phrase de lancement. Au-delà, il tombe dans la phrase précédente et on
-# repart en plein milieu d'un mot.
-SNAP = 1.0
+# Sous cette durée, une prise de parole est un parasite de diarisation, pas un
+# tour de parole.
+MIN_TURN = 1.5
 
 
 def _norm(s):
     s = unicodedata.normalize("NFKD", s)
     s = "".join(c for c in s if not unicodedata.combining(c))
     return "".join(c for c in s.lower() if c.isalnum())
-
-
-def _flat(s):
-    """Minuscules, sans accent, ponctuation en espaces — mots préservés."""
-    s = unicodedata.normalize("NFKD", s)
-    s = "".join(c for c in s if not unicodedata.combining(c))
-    return " ".join("".join(c if c.isalnum() else " "
-                            for c in s.lower()).split())
-
-
-def is_launch(text, names=()):
-    """Cette phrase lance-t-elle un sujet ?
-
-    Le nom de la personne est le signal le plus sûr (« le reportage de … »),
-    d'où l'intérêt de names.txt. À défaut, on s'appuie sur les tournures."""
-    if names and name_in_text(text, names):
-        return True
-    flat = _flat(text)
-    return any(cue in flat for cue in LAUNCH_CUES)
 
 
 def name_in_text(text, names, fuzzy=0.82):
@@ -92,62 +69,63 @@ def _cut_forward(t, cuts, window=15.0):
     return min(cand) if cand else t
 
 
-def launch_sentence(transcript, block_start, max_lookback=40.0, names=(),
-                    launch_gap=10.0):
-    """Début de la phrase de lancement, ou None s'il n'y en a pas.
+def _lead_in(anchor, transcript):
+    """Recule un peu avant `anchor`, sans mordre la phrase précédente."""
+    begin = anchor - LEAD_IN
+    if transcript:
+        before = [e for _, e, _ in transcript if e <= anchor + 0.01]
+        if before:
+            begin = max(begin, max(before) - MARGIN)
+    return min(begin, anchor)
 
-    Le repère est la phrase, pas le changement de plan : sur un plateau la
-    caméra change au milieu des phrases, et s'y caler fait démarrer en plein mot.
 
-    Un lancement doit **coller** au reportage : sa phrase se termine dans les
-    `launch_gap` secondes qui précèdent la première parole. Sans cette
-    condition, le « Reportage à suivre » du sommaire, prononcé trente secondes
-    et une météo plus tôt, est pris pour le lancement.
-
-    Parmi les phrases qui restent, on garde la PLUS ANCIENNE qui lance : un
-    lancement tient parfois en deux phrases, autant les avoir toutes."""
+def _sentence_at_or_after(transcript, t):
+    """Début de la première phrase qui commence à `t` ou après."""
     if not transcript:
         return None
-    floor = block_start - max_lookback
-    for start, end, text in sorted(transcript):
-        if end <= floor or start >= block_start:
-            continue
-        if end > block_start + 0.01:      # phrase déjà à cheval sur sa parole
-            continue
-        if block_start - end > launch_gap:
-            continue
-        if is_launch(text, names):
-            return start
-    return None
+    starts = sorted(st for st, _, _ in transcript if st >= t - 0.01)
+    return starts[0] if starts else None
 
 
 def launch_start(all_turns, her_label, block_start, cuts,
                  max_lookback=40.0, launch_gap=10.0, precut_window=5.0,
-                 transcript=None, names=()):
-    """Début du passage.
+                 transcript=None, names=(), min_turn=MIN_TURN):
+    """Début du passage = la prise de parole qui précède la sienne.
 
-    Deux cas, et c'est la distinction qui compte :
-    - le présentateur lance le sujet -> on démarre au début de cette phrase ;
-    - il enchaîne sans lancer (le sujet suit la météo ou un titre) -> on démarre
-      sur le plan où elle apparaît, sans remonter dans le sujet d'avant.
+    Le lancement, c'est le présentateur qui parle juste avant elle. On démarre
+    donc au début de SA prise de parole. Ce repère est structurel : il ne
+    dépend d'aucune tournure, d'aucune chaîne, d'aucune langue.
 
-    L'ancienne version prenait le dernier changement de plan dans une fenêtre
-    large. Sur un présentateur qui parle sans interruption depuis 50 s, ça
-    tombait n'importe où : en pleine météo, ou au milieu d'une phrase."""
-    cuts = sorted(cuts or [])
-    anchor = launch_sentence(transcript, block_start, max_lookback, names,
-                             launch_gap)
-    if anchor is not None:
-        # caler sur un changement de plan seulement s'il colle à la phrase
-        near = [c for c in cuts if anchor - SNAP <= c <= anchor + 0.2]
-        return max(near) if near else anchor
+    Deux versions précédentes s'y sont cassé les dents. Prendre le dernier
+    changement de plan dans une large fenêtre tombait en pleine météo, parce
+    qu'un présentateur enchaîne les sujets sans reprendre son souffle. Chercher
+    des tournures de lancement dans le texte (« reportage de », « sur place »)
+    marchait sur un JT et sur un seul : c'est du vocabulaire de rédaction figé
+    dans le code.
 
-    # Pas de lancement : on prend le dernier plan avant elle, ce qui donne une
-    # petite amorce sans mordre sur le sujet précédent.
-    limit = block_start - 0.5
+    Ce qui délimite vraiment le lancement, c'est le tour de parole. Un
+    générique, un reportage précédent ou un silence le coupent naturellement.
+    """
     floor = block_start - max_lookback
-    prev = [c for c in cuts if floor <= c <= limit]
-    return max(prev) if prev else max(floor, limit)
+    before = [(s, e) for s, e, lab in all_turns
+              if lab != her_label and e <= block_start + 0.01
+              and e - s >= min_turn]
+    if not before:
+        # Personne ne parle avant elle : on démarre sur le plan où elle
+        # apparaît, sans remonter dans ce qui précède.
+        # Le dernier plan avant sa parole EST la première image de son sujet
+        # (fin du générique, ouverture du reportage) : on démarre dessus.
+        prev = [c for c in sorted(cuts or []) if floor <= c <= block_start]
+        return max(prev) if prev else max(floor, block_start - 0.5)
+
+    anchor = max(before, key=lambda t: t[1])[0]
+    if anchor < floor:
+        # Tour trop long pour être pris en entier (il couvre les sujets d'avant).
+        # On coupe au plafond, mais jamais en plein milieu d'une phrase.
+        anchor = _sentence_at_or_after(transcript, floor) or floor
+        if anchor >= block_start:
+            anchor = floor
+    return _lead_in(anchor, transcript)
 
 
 def last_word(all_turns, her_label, block_end, min_turn=0.5):

@@ -162,7 +162,13 @@ director-cut run "URL" --mode reportage --fast
 
 ---
 
-## Vignettes 9:16
+## Vignettes 9:16 *(optionnel, `--screens`)*
+
+> **Désactivées par défaut, et c'est volontaire.** Une image de télévision est en
+> 16:9 ; un recadrage 9:16 n'en garde que **32 % de la largeur**. Les bords
+> sautent, la personne filmée est coupée, et le résultat est rarement publiable
+> tel quel. La retouche IA qui l'accompagne charge par ailleurs lourdement la
+> machine. Le cadrage reste un chantier ouvert : voir *Limites connues*.
 
 Le rendu reprend celui des vignettes publiées par les chaînes : **image plein
 cadre** (recadrage 9:16 centré, ni bandes noires ni fond flou) et **logo posé à
@@ -270,7 +276,8 @@ final (0 pour couper).
 | `--sharpen X` | Force du masque flou sur les vignettes (défaut 0.8, 0 = coupé). |
 | `--sans-retouche` | Coupe la retouche IA des vignettes. |
 | `--strip-furniture` / `--no-strip-furniture` | Force le rognage des bandes d'habillage (défaut : actif avec la retouche). |
-| `--no-screens` / `--no-mkv` / `--no-transcript` | Désactive une sortie. |
+| `--screens` | Produit les vignettes 9:16 (désactivées par défaut, voir plus bas). |
+| `--no-mkv` / `--no-transcript` | Désactive une sortie. |
 | `--workers N` | Tâches en parallèle (défaut 3). |
 | `--name X` | Variante de nom en plus de `names.txt` (répétable). |
 | `--whisper-size` | `tiny`…`large-v3` pour la transcription. |
@@ -340,8 +347,13 @@ elles-mêmes se valident sur un run réel.
   échantillonnée donne un seuil bancal (jouer sur `--threshold`).
 - Un reportage entrecoupé de longues interviews peut ressortir en plusieurs
   passages → augmenter `--merge-gap`.
-- Le recadrage 9:16 est centré. Il ne suit pas le sujet : si la personne
-  filmée est sur un bord du cadre, elle peut sortir de la vignette.
+- **Cadrage des vignettes : chantier ouvert.** Le recadrage 9:16 est centré et
+  ne suit pas le sujet. Surtout, il ne garde qu'un tiers de la largeur, ce qui
+  serre trop l'image. La bonne réponse serait de garder l'image entière et de
+  faire *générer* le haut et le bas manquants (outpainting), comme le font les
+  outils grand public. Testé et écarté pour l'instant : un modèle de diffusion
+  en local sature une machine portable, et la génération d'images de l'API
+  Gemini n'existe pas en gratuit. D'où l'option, plutôt qu'un défaut bancal.
 - Sur une source 720p, la vignette 1080×1920 est un agrandissement (×1.8, et
   ×4 avec `--strip-furniture`). Le masque flou compense, il ne crée pas du
   détail qui n'existe pas.

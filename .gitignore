@@ -1,5 +1,6 @@
 # Secrets et données personnelles — ne doivent JAMAIS partir dans le dépôt
 .hf_token
+.gemini_key
 names.txt
 voix_ref.npz
 *.npz

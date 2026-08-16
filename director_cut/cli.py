@@ -130,6 +130,8 @@ def cli():
 @click.option("--num-speakers", default=None, type=int)
 @click.option("--pad", default=1.0, type=float)
 @click.option("--min-len", default=3.0, type=float)
+@click.option("--min-turn", default=1.5, type=float,
+              help="Durée mini d'une prise de parole pour compter (écarte les parasites de diarisation).")
 @click.option("--lookback", default=40.0, type=float,
               help="Durée max remontée pour l'annonce (s).")
 @click.option("--launch-gap", default=10.0, type=float,
@@ -155,15 +157,18 @@ def cli():
               help="Retouche IA des vignettes : efface le bandeau et agrandit "
                    "proprement. Ignorée si les modèles ne sont pas installés "
                    "(director-cut models).")
-@click.option("--no-screens", is_flag=True, help="Pas de screenshots.")
+@click.option("--screens/--no-screens", "screens_on", default=False,
+              help="Vignettes 9:16 par passage. Désactivées par défaut : le "
+                   "recadrage d'un 16:9 en 9:16 ne garde qu'un tiers de la "
+                   "largeur, et la retouche IA charge lourdement la machine.")
 @click.option("--no-mkv", is_flag=True, help="Pas de MKV sous-titré.")
 @click.option("--no-transcript", is_flag=True, help="Pas de sous-titres (ni FR ni EN).")
 @click.option("--whisper-size", default="small")
 @click.option("--workers", default=3, type=int, help="Tâches en parallèle.")
 @click.option("--hf-token", default=None, help="Défaut: .hf_token ou HF_TOKEN.")
 def run_cmd(url, mode, merge_gap, out, ref, names, threshold, num_speakers, pad,
-            min_len, lookback, launch_gap, precut, end_trim, fast, shots_n,
-            brand, sharpen, strip_furniture, retouche, no_screens, no_mkv,
+            min_len, min_turn, lookback, launch_gap, precut, end_trim, fast,
+            shots_n, brand, sharpen, strip_furniture, retouche, screens_on, no_mkv,
             no_transcript, whisper_size, workers, hf_token):
     """Traite une URL ou un fichier vidéo local et découpe les passages.
 
@@ -175,17 +180,17 @@ def run_cmd(url, mode, merge_gap, out, ref, names, threshold, num_speakers, pad,
     try:
         with lock.Lock(out):
             _run(console, url, mode, merge_gap, out, ref, names, threshold,
-                 num_speakers, pad, min_len, lookback, launch_gap, precut,
-                 end_trim, fast, shots_n, brand, sharpen, strip_furniture,
-                 retouche, no_screens, no_mkv, no_transcript, whisper_size,
+                 num_speakers, pad, min_len, min_turn, lookback, launch_gap,
+                 precut, end_trim, fast, shots_n, brand, sharpen, strip_furniture,
+                 retouche, screens_on, no_mkv, no_transcript, whisper_size,
                  workers, hf_token)
     except lock.Busy as e:
         raise click.ClickException(str(e))
 
 
 def _run(console, url, mode, merge_gap, out, ref, names, threshold,
-         num_speakers, pad, min_len, lookback, launch_gap, precut, end_trim,
-         fast, shots_n, brand, sharpen, strip_furniture, retouche, no_screens,
+         num_speakers, pad, min_len, min_turn, lookback, launch_gap, precut,
+         end_trim, fast, shots_n, brand, sharpen, strip_furniture, retouche, screens_on,
          no_mkv, no_transcript, whisper_size, workers, hf_token):
     workdir = os.getcwd()
     hf_token = _read_token(workdir, hf_token)
@@ -196,7 +201,7 @@ def _run(console, url, mode, merge_gap, out, ref, names, threshold,
 
     template = None
     enhance_opts = None
-    if not no_screens:
+    if screens_on:
         try:
             # On charge une première fois pour savoir ce que la retouche peut
             # faire, puis on tranche le rognage en fonction.
@@ -273,6 +278,17 @@ def _run(console, url, mode, merge_gap, out, ref, names, threshold,
     default_gap = {"chronique": 20.0, "reportage": 60.0, "jt": 300.0}[mode]
     gap = merge_gap if merge_gap is not None else default_gap
 
+    # La diarisation lui attribue des miettes d'une fraction de seconde sur un
+    # générique ou un fond sonore. Regroupées avec sa vraie prise de parole,
+    # elles ramènent le début du passage des dizaines de secondes trop tôt.
+    solid = segments.drop_short(her, min_turn)
+    if solid:
+        dropped = len(her) - len(solid)
+        if dropped:
+            ui.info(console, f"{dropped} fragment(s) de moins de {min_turn:g}s "
+                             "écartés (parasites de diarisation)")
+        her = solid
+
     if mode == "jt":
         merged = segments.merge_segments(her, gap)
         final = segments.snap_to_scenes(segments.pad_segments(merged, pad), cuts)
@@ -302,8 +318,16 @@ def _run(console, url, mode, merge_gap, out, ref, names, threshold,
     # Dossier propre au run, un sous-dossier par type
     date = _guess_date(url)
     run_dir = os.path.join(out, f"extract_{mode}_{date}")
-    dirs = {k: os.path.join(run_dir, k)
-            for k in ("passages", "audio", "srt", "screens", "mkv")}
+    # Un dossier par type de sortie, et uniquement pour ce qu'on produit :
+    # un dossier vide laisse croire que la sortie a échoué.
+    kinds = ["passages", "audio"]
+    if not no_transcript:
+        kinds.append("srt")
+    if screens_on:
+        kinds.append("screens")
+    if not no_mkv and not no_transcript:
+        kinds.append("mkv")
+    dirs = {k: os.path.join(run_dir, k) for k in kinds}
     for d in dirs.values():
         os.makedirs(d, exist_ok=True)
 
@@ -325,7 +349,7 @@ def _run(console, url, mode, merge_gap, out, ref, names, threshold,
             from . import transcribe
             subs.append((transcribe.clip_srt(
                 en_tx, s, e, os.path.join(dirs["srt"], base + ".en.srt")), "eng"))
-        if not no_screens:
+        if screens_on:
             screens.shots(video, s, e, dirs["screens"], base, n=shots_n,
                           brand=template, sharpen=sharpen,
                           enhance_opts=enhance_opts, cuts=cuts)
@@ -340,8 +364,8 @@ def _run(console, url, mode, merge_gap, out, ref, names, threshold,
             "Relance la commande : elle sera retéléchargée.")
 
     ui.step(console, 6, 6,
-            f"Découpe + SRT + screens + MKV ({len(final)} passage(s), "
-            f"{max(1, workers)} en //)…")
+            f"Découpe + {' + '.join(sorted(k for k in dirs if k != 'passages'))}"
+            f" ({len(final)} passage(s), {max(1, workers)} en //)…")
     done, failed = [], []
     with ui.make_progress(console) as prog:
         task = prog.add_task("passages", total=len(final))
@@ -367,7 +391,9 @@ def _run(console, url, mode, merge_gap, out, ref, names, threshold,
 
     console.print(f"\n[bold green]Terminé.[/] "
                   f"{len(done)}/{len(final)} passage(s) dans : [green]{run_dir}[/]")
-    console.print("  passages/  audio/  srt/ (FR+EN)  screens/ (9:16)  mkv/")
+    console.print("  " + "  ".join(f"{k}/" for k in sorted(dirs)))
+    if not screens_on:
+        ui.info(console, "vignettes 9:16 non produites (--screens pour les avoir)")
 
 
 @cli.command("enroll")
