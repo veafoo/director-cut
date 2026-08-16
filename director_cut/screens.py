@@ -26,6 +26,8 @@ SHARPEN_ENHANCED = 0.2
 # Fenêtre (s) et nombre de frames candidates pour le choix de l'instant.
 PICK_WINDOW = 0.6
 PICK_CANDIDATES = 5
+# Sous cette durée, un plan est une transition ou un filé : mauvaise vignette.
+MIN_SHOT = 1.5
 
 
 def _run(cmd):
@@ -181,20 +183,46 @@ def _grab_enhanced(video, t, out_img, brand, w, h, enhance_opts):
     return out_img
 
 
-def shots(video, start, end, out_dir, prefix, n=4, brand=None,
-          window=PICK_WINDOW, candidates=PICK_CANDIDATES, sharpen=SHARPEN,
-          enhance_opts=None):
-    """N vignettes 9:16 réparties dans [start, end], chacune prise sur la frame
-    la plus nette de son voisinage."""
-    os.makedirs(out_dir, exist_ok=True)
-    dur = max(0.1, end - start)
-    # La fenêtre de recherche ne doit pas empiéter sur la vignette voisine.
-    window = min(window, dur / (n + 2))
+def pick_shots(cuts, start, end, n, min_shot=MIN_SHOT):
+    """Un plan différent par vignette, répartis sur tout le passage.
+
+    Répartir des instants à intervalles fixes, sans regarder où sont les plans,
+    fait tomber sur des transitions et donne quatre fois le même cadre quand un
+    plan dure longtemps. On découpe donc le passage en plans, on écarte les
+    plus courts (transitions, panoramiques filés), et on en prend n bien
+    espacés. Un plan long est réutilisé, mais en visant un endroit différent,
+    plutôt que de rendre moins de vignettes que demandé."""
+    edges = [start] + [c for c in sorted(cuts or []) if start < c < end] + [end]
+    shots = [(a, b) for a, b in zip(edges, edges[1:]) if b - a >= min_shot]
+    if not shots:
+        shots = [(start, max(end, start + 0.1))]
+
+    if len(shots) >= n:
+        step = (len(shots) - 1) / max(1, n - 1) if n > 1 else 0
+        chosen = [shots[round(i * step)] for i in range(n)]
+        return [((a + b) / 2, a, b) for a, b in chosen]
+
+    # Moins de plans que de vignettes : on répartit dans les plus longs.
     out = []
     for i in range(n):
-        t = start + dur * (i + 1) / (n + 1)
-        t = best_time(video, t, window=window, candidates=candidates)
-        fin = os.path.join(out_dir, f"{prefix}_{i + 1:02d}.jpg")
+        a, b = shots[i % len(shots)]
+        k, total = i // len(shots), (n + len(shots) - 1) // len(shots)
+        out.append((a + (b - a) * (k + 1) / (total + 1), a, b))
+    return sorted(out)
+
+
+def shots(video, start, end, out_dir, prefix, n=4, brand=None,
+          window=PICK_WINDOW, candidates=PICK_CANDIDATES, sharpen=SHARPEN,
+          enhance_opts=None, cuts=None):
+    """N vignettes 9:16 : un plan distinct chacune, sur sa frame la plus nette."""
+    os.makedirs(out_dir, exist_ok=True)
+    out = []
+    for i, (t, lo, hi) in enumerate(pick_shots(cuts, start, max(end, start + 0.1),
+                                               n), 1):
+        # La recherche de netteté ne doit pas déborder sur le plan voisin.
+        span = min(window, max(0.0, (hi - lo) - 0.2))
+        t = best_time(video, t, window=span, candidates=candidates)
+        fin = os.path.join(out_dir, f"{prefix}_{i:02d}.jpg")
         grab_vertical(video, t, fin, brand=brand, sharpen=sharpen,
                       enhance_opts=enhance_opts)
         out.append(fin)

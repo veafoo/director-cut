@@ -149,8 +149,8 @@ def cli():
               help="Force du masque flou sur les vignettes (0 = désactivé).")
 @click.option("--strip-furniture/--no-strip-furniture", default=None,
               help="Sort du cadre les bandes d'habillage qui touchent un bord. "
-                   "Actif par défaut avec la retouche IA (la super-résolution "
-                   "rattrape le zoom), inactif sans elle.")
+                   "Inutile quand l'effacement IA est actif : il reconstruit "
+                   "déjà le décor, et rogner en plus ne fait que zoomer.")
 @click.option("--retouche/--sans-retouche", "retouche", default=True,
               help="Retouche IA des vignettes : efface le bandeau et agrandit "
                    "proprement. Ignorée si les modèles ne sont pas installés "
@@ -210,8 +210,10 @@ def _run(console, url, mode, merge_gap, out, ref, names, threshold,
                              "disponibles, précise --brand)")
         if retouche:
             enhance_opts = _retouche_opts(console, template)
-        strip = enhance_opts is not None if strip_furniture is None \
-            else strip_furniture
+        # Quand l'effacement IA est actif, le bandeau est reconstruit : rogner
+        # les bandes en plus ne ferait que zoomer davantage pour rien.
+        clean = bool(enhance_opts and enhance_opts.get("clean"))
+        strip = (not clean) if strip_furniture is None else strip_furniture
         if strip and template:
             template = brands.auto(brand, workdir, strip=True)
 
@@ -326,7 +328,7 @@ def _run(console, url, mode, merge_gap, out, ref, names, threshold,
         if not no_screens:
             screens.shots(video, s, e, dirs["screens"], base, n=shots_n,
                           brand=template, sharpen=sharpen,
-                          enhance_opts=enhance_opts)
+                          enhance_opts=enhance_opts, cuts=cuts)
         if not no_mkv and subs:
             mux.mux_mkv(made["mp4"], subs,
                         os.path.join(dirs["mkv"], base + ".mkv"))

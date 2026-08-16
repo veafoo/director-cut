@@ -319,11 +319,12 @@ def test_shots_passes_the_brand_to_every_capture(no_search, ffmpeg, tmp_path,
                for c in ffmpeg)
 
 
-def test_the_search_window_never_overlaps_the_next_thumbnail(monkeypatch,
-                                                             ffmpeg, tmp_path):
+def test_the_search_window_never_leaves_its_shot(monkeypatch, ffmpeg, tmp_path):
     windows = []
     monkeypatch.setattr(screens, "best_time",
-                        lambda video, t, window, candidates: windows.append(window) or t)
-    # 4 vignettes dans 3 s : les instants visés sont espacés de 0.6 s
-    screens.shots("in.mp4", 0.0, 3.0, str(tmp_path), "p", n=4)
-    assert max(windows) <= 3.0 / 6
+                        lambda video, t, window, candidates:
+                        windows.append(window) or t)
+    # des plans d'une seconde : la recherche de netteté doit tenir dedans
+    screens.shots("in.mp4", 0.0, 4.0, str(tmp_path), "p", n=4,
+                  cuts=[1.0, 2.0, 3.0])
+    assert max(windows) <= 1.0
