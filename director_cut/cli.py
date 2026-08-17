@@ -262,7 +262,7 @@ def run_cmd(jobs):
             director-cut run --mode reportage "URL1" --mode jt "URL2"
     """
     console = Console()
-    ui.splash(console)
+    ui.splash(console, jobs)
 
     out = jobs[0]["out"]
     os.makedirs(out, exist_ok=True)
@@ -273,7 +273,7 @@ def run_cmd(jobs):
                 params = dict(job)
                 url = params.pop("urls")[0]
                 if len(jobs) > 1:
-                    console.rule(f"[bold cyan]{i}/{len(jobs)}[/] "
+                    console.rule(f"[bold {ui.ACCENT}]{i}/{len(jobs)}[/] "
                                  f"{_label(url)} · {params['mode']}")
                 run_dir = _free_run_dir(params["out"], params["mode"], url, taken)
                 try:
@@ -425,7 +425,7 @@ def _run(console, url, run_dir, *, mode, merge_gap, out, ref, names, threshold,
     else:
         ui.step(console, 5, 6, "Transcription… (ignorée)")
 
-    with console.status("[cyan]Détection des plans…[/]"):
+    with console.status(f"[{ui.ACCENT}]Détection des plans…[/]"):
         cuts = scenes.scene_cuts(video)
 
     # Bornes des passages
@@ -588,7 +588,7 @@ def models_cmd():
         if enhance.is_ready(name):
             console.print(f"[green]✓[/] {name} déjà installé")
             continue
-        console.print(f"[cyan]»[/] téléchargement de {name}…")
+        console.print(f"[{ui.ACCENT}]»[/] téléchargement de {name}…")
         enhance.download(name)
         console.print(f"[green]✓[/] {name}")
     console.print(f"\nModèles dans [green]{enhance.CACHE}[/]. "

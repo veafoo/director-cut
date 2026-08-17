@@ -1,37 +1,141 @@
-from rich.console import Console
+import getpass
+import os
+from importlib import metadata
+
+from rich import box
+from rich.align import Align
+from rich.console import Group
 from rich.panel import Panel
 from rich.progress import (BarColumn, Progress, SpinnerColumn, TextColumn,
                            TimeElapsedColumn)
+from rich.rule import Rule
 from rich.table import Table
 from rich.text import Text
 
-# Caméra de reportage entre deux bobines de film.
+# Une seule couleur pour tout l'outil.
+ACCENT = "blue"
+
+# Caméra d'épaule : deux bobines, le témoin REC, le fût de l'objectif à droite.
 _CAMERA = r"""
-     ___                                         ___
-   ,'   `.        _______________________      ,'   `.
-  / () () \      |  ___              (o) o |   / () () \
- | ()   () |=====| |   |   CAM         REC |==| ()   () |
-  \ () () /      | |___|      __________   |   \ () () /
-   `.___,'       |__________ |          |  |    `.___,'
-                            `+----------+--+
+    ▗▄▖   ▗▄▖
+    ▐█▌   ▐█▌
+ ▗▄▄▟▄▄▄▄▄▟▄▄▄▖
+ ▐ ▗ REC      ▌▄▄
+ ▐            ▌██
+ ▝▀▀▀▀▀▀▀▀▀▀▀▀▘▀▀
 """.strip("\n").splitlines()
 
+_TIPS = (
+    'director-cut run "URL" --mode reportage',
+    "Une option s'applique aux vidéos qui la suivent.",
+)
 
-def splash(console):
+_NEWS = (
+    "Les bornes d'un passage suivent les tours de parole",
+    "Plusieurs vidéos en une commande, un réglage par vidéo",
+    "Une rediffusion ne ressort plus en double",
+)
+
+# En dessous, deux colonnes ne tiennent plus : on empile.
+_WIDE = 92
+_LEFT = 40
+
+
+def _version():
+    try:
+        return metadata.version("director-cut")
+    except metadata.PackageNotFoundError:      # dépôt non installé
+        return ""
+
+
+def _user_name():
+    """Le prénom du compte de la machine, à défaut son identifiant."""
+    name = ""
+    try:
+        import pwd
+        name = pwd.getpwuid(os.getuid()).pw_gecos.split(",")[0].strip()
+    except Exception:                          # noqa: BLE001  (Windows, compte sans gecos)
+        pass
+    if not name:
+        try:
+            name = getpass.getuser()
+        except Exception:                      # noqa: BLE001  (ni env ni compte)
+            return ""
+    first = name.split()[0] if name.split() else ""
+    return first[:1].upper() + first[1:]
+
+
+def _cwd():
+    path = os.getcwd()
+    home = os.path.expanduser("~")
+    return "~" + path[len(home):] if path.startswith(home) else path
+
+
+def _jobs_line(jobs):
+    """« 2 vidéos · reportage, jt » — ce que la commande va traiter."""
+    if not jobs:
+        return ""
+    modes = []
+    for job in jobs:
+        mode = job.get("mode")
+        if mode and mode not in modes:
+            modes.append(mode)
+    count = f"{len(jobs)} vidéos" if len(jobs) > 1 else "1 vidéo"
+    return f"{count} · {', '.join(modes)}" if modes else count
+
+
+def _welcome(jobs):
+    name = _user_name()
+    hello = f"Bienvenue, {name} !" if name else "Bienvenue !"
+    lines = [
+        Text(""),
+        Text(hello, style="bold", justify="center"),
+        Text(""),
+        Align.center(Text("\n".join(_CAMERA), style=f"bold {ACCENT}"),
+                     pad=False),
+        Text(""),
+    ]
+    jobs_line = _jobs_line(jobs)
+    if jobs_line:
+        lines.append(Text(jobs_line, style="dim", justify="center"))
+    lines.append(Text(f"{_cwd()} · Veafoo", style="dim", justify="center",
+                      overflow="ellipsis", no_wrap=True))
+    return Group(*lines)
+
+
+def _help():
+    lines = [Text("Pour commencer", style="bold")]
+    lines += [Text(t, style="dim") for t in _TIPS]
+    lines.append(Rule(style=ACCENT))
+    lines.append(Text("Nouveautés", style="bold"))
+    lines += [Text(n, style="dim") for n in _NEWS]
+    lines.append(Text("Détails : README.md", style="dim"))
+    return Group(*lines)
+
+
+def splash(console, jobs=None):
+    version = _version()
+    title = f"[bold]director-cut[/]{f' v{version}' if version else ''}"
+
+    if console.width >= _WIDE:
+        # box.MINIMAL sans bord extérieur : il ne reste que le trait vertical
+        # entre les deux colonnes, comme la barre du panneau.
+        body = Table(box=box.MINIMAL, show_header=False, show_edge=False,
+                     border_style=ACCENT, expand=True, pad_edge=False)
+        body.add_column(width=_LEFT)
+        body.add_column(ratio=1)
+        body.add_row(_welcome(jobs), _help())
+    else:
+        body = Group(_welcome(jobs), Rule(style=ACCENT), _help())
+
     console.print()
-    w = max((len(l) for l in _CAMERA), default=0)
-    for line in _CAMERA:
-        console.print(Text(line.ljust(w), style="bold cyan"),
-                      justify="center", no_wrap=True, overflow="crop")
-    console.print(Text("director-cut", style="bold white"), justify="center")
-    console.rule(style="cyan")
-    console.print(Text("Created by Veafoo", style="dim italic"),
-                  justify="right")
+    console.print(Panel(body, title=title, title_align="left",
+                        border_style=ACCENT, box=box.ROUNDED))
     console.print()
 
 
 def step(console, n, total, label):
-    console.print(f"[bold cyan]{n}/{total}[/] {label}")
+    console.print(f"[bold {ACCENT}]{n}/{total}[/] {label}")
 
 
 def make_progress(console):
@@ -59,7 +163,7 @@ def detection_summary(console, mode, label, score, threshold, n_passages,
         tbl.add_row("Lancement", name_status)
     tbl.add_row("Passages retenus", str(n_passages))
     tbl.add_row("Durée totale", f"{total_kept:.0f} s")
-    console.print(Panel(tbl, title="[bold]Détection[/]", border_style="cyan",
+    console.print(Panel(tbl, title="[bold]Détection[/]", border_style=ACCENT,
                         expand=False))
 
 
