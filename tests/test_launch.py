@@ -387,3 +387,23 @@ def test_the_announcement_is_reachable_beyond_the_lookback_from_her_voice():
     assert bs - 202.1 > 40.0
     start = launch.launch_start(P3_TURNS, HER, bs, P3_CUTS, max_lookback=40.0)
     assert start <= 202.2
+
+
+def test_a_missed_transition_does_not_put_the_studio_back_in():
+    # Aucun plan détecté au retour plateau : sans garde-fou, la coupe partait
+    # au plan suivant, six secondes après que le présentateur ait repris.
+    bs, be = _blocks(P3_TURNS)[0]
+    _, end, _ = launch.build_span("reportage", P3_TURNS, HER, bs, be,
+                                  cuts=P3_CUTS, end_trim=0.5)
+    assert end < 331.2                  # avant qu'il ne reparle
+    assert end >= 325.9                 # sans couper sa dernière phrase
+
+
+def test_a_detected_transition_wins_over_the_guard():
+    # Quand la détection de plans fait son travail, c'est elle qui décide :
+    # le garde-fou ne corrige qu'une transition manquée.
+    cuts = P3_CUTS + [327.0]
+    bs, be = _blocks(P3_TURNS)[0]
+    _, end, _ = launch.build_span("reportage", P3_TURNS, HER, bs, be,
+                                  cuts=cuts, end_trim=0.0)
+    assert end == 327.0

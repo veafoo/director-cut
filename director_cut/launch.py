@@ -12,6 +12,9 @@ MARGIN = 0.15
 # tour de parole.
 MIN_TURN = 1.5
 
+# Marge devant la reprise de parole du présentateur. Le plateau réapparaît
+# avant qu'il ne parle : c'est un plafond de sécurité, pas la borne visée.
+STUDIO_MARGIN = 1.0
 
 
 def _norm(s):
@@ -174,7 +177,7 @@ def last_word(all_turns, her_label, block_end, min_turn=0.5):
 
 
 def reportage_end(all_turns, her_label, block_end, cuts, precut_window=5.0,
-                  forward=15.0):
+                  forward=15.0, min_turn=MIN_TURN):
     """Fin = dernière image du reportage.
 
     Le retour plateau est un changement de plan, pas une prise de parole : le
@@ -182,11 +185,24 @@ def reportage_end(all_turns, her_label, block_end, cuts, precut_window=5.0,
     avant qu'il ne parle » montrait donc le plateau à tous les coups. On vise
     donc le plan qui le ramène.
 
-    donc le plan qui le ramène."""
+    Mais la détection de plans rate les transitions douces. Quand elle en
+    manque une, le premier plan trouvé est déjà bien après le retour plateau.
+    D'où un plafond qui ne dépend pas d'elle : on ne dépasse jamais le moment
+    où le présentateur reprend la parole. Le plateau est alors déjà à l'image,
+    mais on s'arrête avant plutôt que six secondes après.
+    """
     end_of_speech = last_word(all_turns, her_label, block_end)
     ahead = [c for c in sorted(cuts or [])
              if end_of_speech - 0.05 <= c <= end_of_speech + forward]
     end = ahead[0] if ahead else max(end_of_speech, block_end)
+
+    host = presenter(all_turns, her_label, min_turn)
+    back = [s for s, e, lab in all_turns
+            if lab == host and s >= end_of_speech - 0.01 and e - s >= min_turn]
+    # Le plafond ne corrige qu'une transition manquée : si le plan trouvé
+    # tombe avant la reprise de parole, c'est la bonne borne, on la garde.
+    if back and end > min(back):
+        end = min(back) - STUDIO_MARGIN
     return max(end, end_of_speech)
 
 
