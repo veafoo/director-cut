@@ -13,6 +13,63 @@ SAMPLE_EXTS = (".mp4", ".mkv", ".webm", ".mov", ".mp3", ".m4a", ".aac",
                ".flac", ".wav")
 
 
+class PerVideo(click.Command):
+    """Commande dont les options se règlent au fil des vidéos.
+
+    Une option s'applique à toutes les vidéos qui la suivent, jusqu'à ce
+    qu'elle change. Posée avant toutes, elle vaut pour le lot entier :
+
+        run --mode reportage "A" "B"          les deux en reportage
+        run --mode reportage "A" --mode jt "B"   A en reportage, B en JT
+
+    Click parse la ligne d'un bloc et ne retient qu'une valeur par option ; on
+    la découpe donc d'abord en une commande par vidéo."""
+
+    def _takes_value(self, token):
+        name = token.split("=", 1)[0]
+        for param in self.params:
+            if name in param.opts or name in param.secondary_opts:
+                return not param.is_flag and "=" not in token
+        return False
+
+    def split(self, args):
+        """[(options, vidéo), …] en respectant l'ordre de la ligne."""
+        jobs, current, i = [], [], 0
+        while i < len(args):
+            token = args[i]
+            if token.startswith("-") and token != "-":
+                current.append(token)
+                if self._takes_value(token) and i + 1 < len(args):
+                    i += 1
+                    current.append(args[i])
+            else:
+                jobs.append((list(current), token))
+            i += 1
+        return jobs, current
+
+    def parse_args(self, ctx, args):
+        # --help et consorts doivent rester traités par click lui-même.
+        if any(a in self.get_help_option_names(ctx) for a in args):
+            return super().parse_args(ctx, args)
+
+        jobs, trailing = self.split(args)
+        if not jobs:
+            raise click.UsageError("Il faut au moins une vidéo.", ctx)
+        if len(trailing) > len(jobs[-1][0]):
+            posees = trailing[len(jobs[-1][0]):]
+            raise click.UsageError(
+                f"Options placées après la dernière vidéo : "
+                f"{' '.join(posees)}. Une option s'applique aux vidéos qui la "
+                f"suivent — place-la avant.", ctx)
+
+        ctx.params = {"jobs": []}
+        for options, url in jobs:
+            sub = click.Context(self, parent=ctx.parent, info_name=ctx.info_name)
+            super().parse_args(sub, options + [url])
+            ctx.params["jobs"].append(sub.params)
+        return []
+
+
 def _read_token(workdir, opt):
     if opt:
         return opt
@@ -134,7 +191,7 @@ def cli():
     """Découpe les passages d'une personne dans une vidéo, par sa voix."""
 
 
-@cli.command("run")
+@cli.command("run", cls=PerVideo)
 @click.argument("urls", nargs=-1, required=True)
 @click.option("--mode", type=click.Choice(["chronique", "reportage", "jt"]),
               default="chronique",
@@ -194,34 +251,33 @@ def cli():
 @click.option("--whisper-size", default="small")
 @click.option("--workers", default=3, type=int, help="Tâches en parallèle.")
 @click.option("--hf-token", default=None, help="Défaut: .hf_token ou HF_TOKEN.")
-def run_cmd(urls, mode, merge_gap, out, ref, names, threshold, num_speakers, pad,
-            min_len, min_turn, keep_reruns, delete_source, lookback, launch_gap, precut, end_trim, fast,
-            shots_n, brand, sharpen, strip_furniture, retouche, screens_on, no_mkv,
-            no_transcript, whisper_size, workers, hf_token):
+def run_cmd(jobs):
     """Traite une ou plusieurs vidéos et découpe les passages.
 
     Chaque URL (ou fichier local) produit son propre dossier d'extraction.
+    Une option s'applique aux vidéos qui la suivent : posée en tête, elle vaut
+    pour tout le lot ; glissée entre deux vidéos, elle change à partir de là.
 
     Usage : director-cut run "URL" ["URL2" …]
-            director-cut run "/chemin/vers/video.mp4" """
+            director-cut run --mode reportage "URL1" --mode jt "URL2"
+    """
     console = Console()
     ui.splash(console)
 
+    out = jobs[0]["out"]
     os.makedirs(out, exist_ok=True)
     taken, done, failed = set(), [], []
     try:
         with lock.Lock(out):
-            for i, url in enumerate(urls, 1):
-                if len(urls) > 1:
-                    console.rule(f"[bold cyan]{i}/{len(urls)}[/] {_label(url)}")
-                run_dir = _free_run_dir(out, mode, url, taken)
+            for i, job in enumerate(jobs, 1):
+                params = dict(job)
+                url = params.pop("urls")[0]
+                if len(jobs) > 1:
+                    console.rule(f"[bold cyan]{i}/{len(jobs)}[/] "
+                                 f"{_label(url)} · {params['mode']}")
+                run_dir = _free_run_dir(params["out"], params["mode"], url, taken)
                 try:
-                    _run(console, url, mode, merge_gap, out, run_dir, ref, names,
-                         threshold, num_speakers, pad, min_len, min_turn,
-                         keep_reruns, delete_source, lookback, launch_gap,
-                         precut, end_trim, fast, shots_n, brand, sharpen,
-                         strip_furniture, retouche, screens_on, no_mkv,
-                         no_transcript, whisper_size, workers, hf_token)
+                    _run(console, url, run_dir, **params)
                     done.append(url)
                 except Exception as e:                   # noqa: BLE001
                     # Une vidéo qui échoue ne doit pas emporter les suivantes :
@@ -235,8 +291,8 @@ def run_cmd(urls, mode, merge_gap, out, ref, names, threshold, num_speakers, pad
     except lock.Busy as e:
         raise click.ClickException(str(e))
 
-    if len(urls) > 1:
-        console.print(f"\n[bold]{len(done)}/{len(urls)} vidéo(s) traitée(s).[/]")
+    if len(jobs) > 1:
+        console.print(f"\n[bold]{len(done)}/{len(jobs)} vidéo(s) traitée(s).[/]")
     if failed and not done:
         raise click.ClickException("Aucune vidéo n'a pu être traitée.")
 
@@ -280,10 +336,11 @@ def _free_run_dir(out, mode, url, taken):
     return path
 
 
-def _run(console, url, mode, merge_gap, out, run_dir, ref, names, threshold,
-         num_speakers, pad, min_len, min_turn, keep_reruns, delete_source, lookback, launch_gap, precut,
-         end_trim, fast, shots_n, brand, sharpen, strip_furniture, retouche, screens_on,
-         no_mkv, no_transcript, whisper_size, workers, hf_token):
+def _run(console, url, run_dir, *, mode, merge_gap, out, ref, names, threshold,
+         num_speakers, pad, min_len, min_turn, keep_reruns, delete_source,
+         lookback, launch_gap, precut, end_trim, fast, shots_n, brand, sharpen,
+         strip_furniture, retouche, screens_on, no_mkv, no_transcript,
+         whisper_size, workers, hf_token):
     workdir = os.getcwd()
     hf_token = _read_token(workdir, hf_token)
     if hf_token:
