@@ -1,16 +1,23 @@
 #!/usr/bin/env bash
 #
-# Installe director-cut sur un Mac neuf, en une fois.
+# Installe director-cut sur un Mac, y compris un Mac neuf où il n'y a rien.
 #
 #   ./install.sh
 #
-# Le script est fait pour être relancé sans risque : chaque étape vérifie
-# d'abord si elle a déjà été faite. Il ne touche à rien en dehors de ce dossier,
-# de Homebrew, et du cache des modèles (~/.cache/director-cut).
+# Ou, sur une machine où le projet n'est même pas encore là :
+#
+#   curl -fsSL https://raw.githubusercontent.com/veafoo/director-cut/main/install.sh | bash
+#
+# Chaque étape regarde d'abord ce qu'il y a sur la machine : ce qui est déjà là
+# est laissé tel quel, ce qui manque est installé. Le script peut être relancé
+# autant de fois que voulu.
+#
+# À la fin, la commande `director-cut` est utilisable depuis n'importe où.
 
 set -euo pipefail
 
-cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEPOT="https://github.com/veafoo/director-cut"
+DOSSIER_PAR_DEFAUT="$HOME/director-cut"
 
 # ---------------------------------------------------------------- affichage --
 
@@ -27,22 +34,61 @@ info()    { printf '  %s%s%s\n' "$GRIS" "$1" "$RAZ"; }
 alerte()  { printf '  %s!%s %s\n' "$ROUGE" "$RAZ" "$1"; }
 stop()    { printf '\n%s%sArrêt :%s %s\n\n' "$GRAS" "$ROUGE" "$RAZ" "$1"; exit 1; }
 
-trap 'printf "\n%s%sL'\''installation s'\''est arrêtée sur une erreur.%s\nRelance ./install.sh : les étapes déjà faites seront sautées.\n\n" "$GRAS" "$ROUGE" "$RAZ"' ERR
+trap 'printf "\n%s%sL'\''installation s'\''est arrêtée sur une erreur.%s\nRelance-la : les étapes déjà faites seront sautées.\n\n" "$GRAS" "$ROUGE" "$RAZ"' ERR
 
-# Question oui/non. Hors terminal (script appelé par un autre script, ou sortie
-# redirigée), on refuse : rien de lourd ni d'irréversible ne doit se lancer sans
-# que quelqu'un ait dit oui.
+# Le script peut être lancé par `curl … | bash` : dans ce cas l'entrée standard
+# est le script lui-même, pas le clavier. On parle alors directement au terminal.
+if [ -t 0 ]; then
+    CLAVIER="/dev/stdin"
+elif [ -e /dev/tty ] && (exec 3<>/dev/tty) 2>/dev/null; then
+    CLAVIER="/dev/tty"
+else
+    CLAVIER=""            # aucune interaction possible
+fi
+
 demander() {
     local question="$1" defaut="${2:-o}" reponse
-    if [ ! -t 0 ]; then return 1; fi
+    [ -n "$CLAVIER" ] || return 1
     if [ "$defaut" = "o" ]; then question="$question [O/n] "; else question="$question [o/N] "; fi
-    read -r -p "  $question" reponse || reponse=""
+    printf '  %s' "$question"
+    read -r reponse < "$CLAVIER" || reponse=""
     reponse="${reponse:-$defaut}"
     [[ "$reponse" =~ ^[oOyY] ]]
 }
 
+# ---------------------------------------------------- récupération du projet --
+# Si le script tourne tout seul (téléchargé par curl), il n'a pas le projet
+# autour de lui : il va le chercher, puis se relance depuis là.
+
+# Lancé par `curl | bash`, BASH_SOURCE est vide : il n'y a pas de dossier autour.
+ICI="$(cd "$(dirname "${BASH_SOURCE[0]:-.}")" 2>/dev/null && pwd || echo "")"
+
+if [ -z "$ICI" ] || [ ! -f "$ICI/pyproject.toml" ]; then
+    printf '\n%s%sInstallation de director-cut%s\n' "$GRAS" "$BLEU" "$RAZ"
+    titre "Récupération du projet"
+    CIBLE="$DOSSIER_PAR_DEFAUT"
+    if [ -f "$CIBLE/pyproject.toml" ]; then
+        ok "déjà présent dans $CIBLE"
+    else
+        info "Téléchargement dans $CIBLE"
+        if command -v git >/dev/null 2>&1; then
+            git clone --depth 1 "$DEPOT" "$CIBLE"
+        else
+            # Pas de git sur un Mac neuf : une archive suffit.
+            mkdir -p "$CIBLE"
+            curl -fsSL "$DEPOT/archive/refs/heads/main.tar.gz" \
+                | tar -xz -C "$CIBLE" --strip-components=1
+        fi
+        ok "projet récupéré"
+    fi
+    exec bash "$CIBLE/install.sh"
+fi
+
+cd "$ICI"
+
 printf '\n%s%sInstallation de director-cut%s\n' "$GRAS" "$BLEU" "$RAZ"
 info "Dossier : $(pwd)"
+[ -n "$CLAVIER" ] || info "Mode non interactif : toute question sera considérée comme un non."
 
 # ------------------------------------------------------------------ système --
 
@@ -54,25 +100,49 @@ case "$(uname -s)" in
     *)      stop "ce script est prévu pour macOS. Sur Windows, suivre la section Installation du README." ;;
 esac
 
+# ------------------------------------------------- outils de base d'un Mac --
+# Sur un Mac neuf, git et les compilateurs n'existent pas : la première commande
+# qui les appelle ouvre une fenêtre d'installation. Autant la provoquer nous-mêmes
+# et attendre qu'elle soit finie, plutôt que de planter au milieu.
+
+if [ "$(uname -s)" = "Darwin" ]; then
+    titre "Outils de développement Apple"
+    if xcode-select -p >/dev/null 2>&1; then
+        ok "déjà installés"
+    else
+        info "Ils sont fournis par Apple et nécessaires à la suite."
+        info "Une fenêtre va s'ouvrir : cliquer « Installer » et accepter."
+        xcode-select --install >/dev/null 2>&1 || true
+        printf '  %sEn attente de la fin de l'\''installation' "$GRIS"
+        while ! xcode-select -p >/dev/null 2>&1; do printf '.'; sleep 20; done
+        printf '%s\n' "$RAZ"
+        ok "installés"
+    fi
+fi
+
 # ------------------------------------------------------------------ Homebrew --
-# Homebrew n'est nécessaire que s'il manque ffmpeg ou un Python récent. On ne
-# l'installe donc qu'au moment où on en a vraiment besoin.
+# Nécessaire seulement s'il manque ffmpeg ou un Python récent : on ne l'installe
+# donc qu'au moment où on en a vraiment besoin.
+
+activer_brew_existant() {
+    command -v brew >/dev/null 2>&1 && return 0
+    local candidat
+    for candidat in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+        [ -x "$candidat" ] && { eval "$("$candidat" shellenv)"; return 0; }
+    done
+    return 1
+}
 
 installer_homebrew() {
-    if command -v brew >/dev/null 2>&1; then return 0; fi
-    for candidat in /opt/homebrew/bin/brew /usr/local/bin/brew; do
-        if [ -x "$candidat" ]; then eval "$("$candidat" shellenv)"; return 0; fi
-    done
-    alerte "Homebrew est absent — c'est l'outil qui installe ffmpeg et Python."
-    info "L'installation va demander le mot de passe de la session."
+    activer_brew_existant && return 0
+    alerte "Homebrew est absent — c'est lui qui installe ffmpeg et Python."
+    info "L'installation demandera le mot de passe de la session."
     if ! demander "Installer Homebrew maintenant ?"; then
         stop "sans Homebrew, il manquera ffmpeg et/ou Python 3.10+."
     fi
-    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-    for candidat in /opt/homebrew/bin/brew /usr/local/bin/brew; do
-        if [ -x "$candidat" ]; then eval "$("$candidat" shellenv)"; fi
-    done
-    command -v brew >/dev/null 2>&1 || stop "Homebrew s'est installé mais reste introuvable. Ferme le Terminal, rouvre-le, et relance ./install.sh"
+    NONINTERACTIVE=1 /bin/bash -c \
+        "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    activer_brew_existant || stop "Homebrew s'est installé mais reste introuvable. Ferme le Terminal, rouvre-le, et relance ./install.sh"
 }
 
 # -------------------------------------------------------------------- ffmpeg --
@@ -93,7 +163,7 @@ command -v curl >/dev/null 2>&1 || stop "curl est introuvable (il est normalemen
 
 # -------------------------------------------------------------------- Python --
 # macOS livre Python 3.9, or le projet demande 3.10 minimum. On cherche donc une
-# version utilisable avant de se rabattre sur Homebrew.
+# version utilisable avant d'en installer une.
 
 titre "Python 3.10 ou plus récent"
 
@@ -132,21 +202,59 @@ else
     ok ".venv créé"
 fi
 
-if .venv/bin/python -c 'import director_cut' 2>/dev/null && .venv/bin/director-cut --help >/dev/null 2>&1; then
-    ok "director-cut déjà installé"
-    info "Mise à jour des dépendances si besoin…"
-fi
-
-info "Téléchargement des bibliothèques (torch, pyannote, whisper…)."
+info "Installation des bibliothèques (torch, pyannote, whisper…)."
 info "Compter plusieurs minutes et ~2 Go la première fois."
 .venv/bin/python -m pip install --quiet --upgrade pip
 .venv/bin/python -m pip install -e .
 ok "installé"
 
+# ------------------------------------------------------------- la commande --
+# Pour que `director-cut` marche depuis n'importe quel dossier, sans avoir à
+# activer quoi que ce soit. Le lanceur se replace toujours dans le projet :
+# c'est là que vivent l'empreinte vocale, le token et le dossier sortie/.
+
+titre "La commande director-cut"
+
+BIN="$HOME/.local/bin"
+mkdir -p "$BIN"
+cat > "$BIN/director-cut" <<LANCEUR
+#!/usr/bin/env bash
+# Écrit par install.sh. Se replace dans le projet, où qu'on l'appelle.
+cd "$(pwd)" || exit 1
+exec "$(pwd)/.venv/bin/director-cut" "\$@"
+LANCEUR
+chmod +x "$BIN/director-cut"
+ok "commande installée dans $BIN"
+
+# Rendre ce dossier visible par le terminal, une fois pour toutes.
+MARQUEUR="# >>> director-cut >>>"
+PATH_A_AJOUTER=false
+for fichier in "$HOME/.zshrc" "$HOME/.bash_profile"; do
+    case "$fichier" in
+        *.zshrc) [ "$(basename "${SHELL:-/bin/zsh}")" = "zsh" ] || continue ;;
+        *)       [ -f "$fichier" ] || continue ;;
+    esac
+    if [ -f "$fichier" ] && grep -q "$MARQUEUR" "$fichier"; then
+        continue
+    fi
+    {
+        printf '\n%s\n' "$MARQUEUR"
+        printf 'export PATH="$HOME/.local/bin:$PATH"\n'
+        printf '%s\n' "# <<< director-cut <<<"
+    } >> "$fichier"
+    PATH_A_AJOUTER=true
+    ok "$(basename "$fichier") mis à jour"
+done
+
+case ":$PATH:" in
+    *":$BIN:"*) COMMANDE_PRETE=true ;;
+    *)          COMMANDE_PRETE=false ;;
+esac
+
 # --------------------------------------------------------------- token HF --
-# Les modèles de diarisation sont sous conditions : il faut un compte Hugging
-# Face, avoir accepté les 3 pages, et un token de lecture. C'est l'étape qui
-# échoue le plus souvent, donc on la vérifie vraiment au lieu de la supposer.
+# Les modèles de reconnaissance de voix sont sous conditions : compte Hugging
+# Face, trois pages à accepter, un token de lecture. C'est l'étape qui échoue le
+# plus souvent, donc on la vérifie vraiment au lieu de la supposer.
 
 MODELES_HF=(
     "pyannote/speaker-diarization-3.1"
@@ -167,7 +275,7 @@ verifier_token() {
                "https://huggingface.co/$modele/resolve/main/config.yaml" || echo 000)
         if [ "$code" != "200" ]; then
             RAISON="les conditions de $modele ne sont pas acceptées (code $code).
-       Ouvre https://huggingface.co/$modele et clique « Agree and access »."
+       Ouvrir https://huggingface.co/$modele et cliquer « Agree and access »."
             return 1
         fi
     done
@@ -176,11 +284,13 @@ verifier_token() {
 
 titre "Accès aux modèles de reconnaissance de voix"
 
+TOKEN_OK=false
 JETON=""
 [ -f .hf_token ] && JETON=$(tr -d '[:space:]' < .hf_token)
 
 if [ -n "$JETON" ] && verifier_token "$JETON"; then
     ok "token déjà en place, et les 3 modèles sont accessibles"
+    TOKEN_OK=true
 else
     [ -n "$JETON" ] && alerte "Le token présent ne suffit pas : $RAISON"
     cat <<'EXPLICATION'
@@ -192,31 +302,22 @@ else
          huggingface.co/pyannote/speaker-diarization-community-1
     3. Créer un token de type « Read » : huggingface.co/settings/tokens
 EXPLICATION
-    if [ -t 0 ] && command -v open >/dev/null 2>&1; then
+    if [ -n "$CLAVIER" ] && command -v open >/dev/null 2>&1; then
         if demander "Ouvrir ces pages dans le navigateur ?"; then
             for modele in "${MODELES_HF[@]}"; do open "https://huggingface.co/$modele"; done
             open "https://huggingface.co/settings/tokens"
         fi
     fi
-
-    if [ ! -t 0 ]; then
-        alerte "Pas de terminal interactif : impossible de demander le token."
-        info "Fais-le à la main :  echo \"hf_xxx\" > .hf_token  puis relance ./install.sh"
-        exit 1
-    fi
-
-    while true; do
-        printf '\n'
-        read -r -p "  Colle le token ici (commence par hf_), ou Entrée pour passer : " JETON
+    while [ -n "$CLAVIER" ]; do
+        printf '\n  Coller le token ici (commence par hf_), ou Entrée pour le faire plus tard : '
+        read -r JETON < "$CLAVIER" || JETON=""
         JETON=$(printf '%s' "$JETON" | tr -d '[:space:]')
-        if [ -z "$JETON" ]; then
-            alerte "Étape sautée. director-cut ne pourra pas tourner tant que .hf_token est absent."
-            break
-        fi
+        [ -z "$JETON" ] && break
         if verifier_token "$JETON"; then
             printf '%s\n' "$JETON" > .hf_token
             chmod 600 .hf_token
-            ok "token enregistré dans .hf_token et vérifié sur les 3 modèles"
+            ok "token enregistré et vérifié sur les 3 modèles"
+            TOKEN_OK=true
             break
         fi
         alerte "$RAISON"
@@ -227,16 +328,22 @@ fi
 
 titre "Extrait de voix"
 
+VOIX_OK=false
 if [ -d samples ] && [ -n "$(find samples -maxdepth 1 -type f \( -iname '*.mp4' -o -iname '*.wav' -o -iname '*.m4a' -o -iname '*.mp3' -o -iname '*.mkv' -o -iname '*.mov' \) 2>/dev/null | head -1)" ]; then
     ok "dossier samples/ trouvé"
+    VOIX_OK=true
 elif compgen -G "sample*" >/dev/null 2>&1; then
     ok "extrait $(compgen -G 'sample*' | head -1) trouvé"
+    VOIX_OK=true
+elif [ -f voix_ref.npz ]; then
+    ok "empreinte vocale déjà fabriquée"
+    VOIX_OK=true
 else
     alerte "Aucun extrait de voix dans ce dossier."
-    info "Dépose ici un fichier nommé sample.mp4 : un passage où on entend"
-    info "beaucoup ta voix (une chronique entière fait un très bon extrait)."
+    info "Déposer ici un fichier nommé sample.mp4 : un passage où on entend"
+    info "beaucoup la voix à reconnaître (une chronique entière est idéale)."
     info "Peu importe qu'il y ait d'autres voix, l'outil repère la dominante."
-    info "L'empreinte vocale sera fabriquée toute seule au premier lancement."
+    info "L'empreinte sera fabriquée toute seule au premier lancement."
 fi
 
 # ------------------------------------------------- modèles de retouche (opt) --
@@ -252,23 +359,12 @@ else
     info "Ils effacent l'habillage de la chaîne sur les vignettes et agrandissent"
     info "l'image. Environ 500 Mo, une seule fois. Sans eux tout marche, les"
     info "vignettes sont juste moins propres."
-    if demander "Les télécharger maintenant ?" "o"; then
+    if demander "Les télécharger maintenant ?"; then
         .venv/bin/director-cut models
     else
-        info "Plus tard :  ./decoupe models"
+        info "Plus tard :  director-cut models"
     fi
 fi
-
-# ------------------------------------------------------------- raccourci --
-# Pour éviter d'avoir à activer l'environnement Python à chaque fois.
-
-cat > decoupe <<'LANCEUR'
-#!/usr/bin/env bash
-# Raccourci : évite d'avoir à activer l'environnement Python à chaque fois.
-cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-exec .venv/bin/director-cut "$@"
-LANCEUR
-chmod +x decoupe
 
 # ---------------------------------------------------------------- vérification --
 
@@ -277,10 +373,26 @@ titre "Vérification"
 .venv/bin/director-cut --help >/dev/null || stop "director-cut ne répond pas. Relance ./install.sh"
 ok "director-cut répond"
 ffmpeg -version >/dev/null 2>&1 && ok "ffmpeg répond"
-[ -s .hf_token ] && ok "token en place" || alerte "token manquant (.hf_token)"
+[ "$TOKEN_OK" = true ] && ok "accès aux modèles de voix vérifié"
 
-printf '\n%s%sPrêt.%s\n\n' "$GRAS" "$VERT" "$RAZ"
-printf '  Pour découper une vidéo, depuis ce dossier :\n\n'
-printf '      %s./decoupe run "COLLER_L_ADRESSE_DU_REPLAY" --mode reportage%s\n\n' "$BLEU" "$RAZ"
-printf '  Les résultats sortent dans %ssortie/%s.\n' "$BLEU" "$RAZ"
+# ------------------------------------------------------------------- la fin --
+
+if [ "$TOKEN_OK" = true ] && [ "$VOIX_OK" = true ]; then
+    printf '\n%s%sTout est prêt.%s\n' "$GRAS" "$VERT" "$RAZ"
+else
+    printf '\n%s%sPresque prêt.%s\n' "$GRAS" "$ROUGE" "$RAZ"
+    [ "$TOKEN_OK" = true ] || printf '  Il manque le token Hugging Face (relancer ./install.sh une fois créé).\n'
+    [ "$VOIX_OK" = true ]  || printf '  Il manque un extrait de voix (sample.mp4) dans %s.\n' "$(pwd)"
+fi
+
+printf '\n'
+if [ "$COMMANDE_PRETE" = false ] || [ "$PATH_A_AJOUTER" = true ]; then
+    printf '  %sOuvrir une nouvelle fenêtre Terminal%s, puis taper :\n\n' "$GRAS" "$RAZ"
+else
+    printf '  Pour découper une vidéo, depuis n'\''importe où :\n\n'
+fi
+printf '      %sdirector-cut run "COLLER_L_ADRESSE_DU_REPLAY" --mode reportage%s\n\n' "$BLEU" "$RAZ"
+printf '  Modes : %s--mode reportage%s (sujet en voix off), %s--mode chronique%s (plateau),\n' "$BLEU" "$RAZ" "$BLEU" "$RAZ"
+printf '  %s--mode jt%s (toute l'\''édition).\n' "$BLEU" "$RAZ"
+printf '  Les résultats sortent dans %s%s/sortie/%s.\n' "$BLEU" "$(pwd)" "$RAZ"
 printf '  Le premier lancement télécharge encore ~2 Go de modèles, une seule fois.\n\n'
