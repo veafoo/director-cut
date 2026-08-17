@@ -63,6 +63,25 @@ partent dans le dépôt.
 
 ## Installation
 
+### Sur Mac : une seule commande
+
+```bash
+cd director-cut
+./install.sh
+```
+
+Le script vérifie et installe ce qui manque (ffmpeg, Python 3.10+ — celui livré
+avec macOS est trop ancien), crée l'environnement, guide la création du token
+Hugging Face **et vérifie qu'il ouvre bien les trois modèles**, puis écrit un
+raccourci `./decoupe`. Il peut être relancé sans risque : les étapes déjà faites
+sont sautées.
+
+```bash
+./decoupe run "https://www.exemple.fr/…/replay.html" --mode reportage
+```
+
+### À la main (ou sur Windows)
+
 Prérequis : **Python 3.10+**, **ffmpeg**, **curl** (présents par défaut sur Mac ;
 sur Windows installer ffmpeg via `winget install Gyan.FFmpeg`).
 

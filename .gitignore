@@ -15,6 +15,9 @@ brands/
 sortie/
 _enroll.wav
 
+# Raccourci écrit par install.sh (dépend du chemin de la machine)
+decoupe
+
 # Notes de travail internes
 BRIEF.md
 HANDOFF.md
