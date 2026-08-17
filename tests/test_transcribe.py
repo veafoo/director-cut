@@ -103,3 +103,24 @@ def test_transcribe_all_translation_does_not_force_the_source_language():
     transcribe.transcribe_all("x.wav", model=model, task="translate")
     assert model.kwargs["task"] == "translate"
     assert "language" not in model.kwargs
+
+
+def test_the_whisper_model_is_loaded_once_per_size(monkeypatch):
+    """Sur un lot de vidéos, un seul chargement par taille de modèle."""
+    charges = []
+
+    class FakeWhisper:
+        def __init__(self, size, **kw):
+            charges.append(size)
+
+    import sys
+    import types
+    fake = types.ModuleType("faster_whisper")
+    fake.WhisperModel = FakeWhisper
+    monkeypatch.setitem(sys.modules, "faster_whisper", fake)
+    monkeypatch.setattr(transcribe, "_models", {})
+
+    for _ in range(3):
+        transcribe.load_model("small")
+    transcribe.load_model("large-v3")
+    assert charges == ["small", "large-v3"]

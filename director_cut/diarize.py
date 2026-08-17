@@ -21,8 +21,18 @@ def _to_turns(output):
     return sorted(turns)
 
 
-def diarize(wav_path, hf_token, num_speakers=None, show_progress=True):
-    """Renvoie une liste de tours de parole : [(debut, fin, label), ...]."""
+_pipeline = None
+
+
+def load_pipeline(hf_token):
+    """Charge le pipeline de diarisation, une fois pour toutes.
+
+    Le chargement prend plusieurs secondes et le modèle ne dépend pas de la
+    vidéo : sur un lot, le recharger à chaque fois est du temps perdu."""
+    global _pipeline
+    if _pipeline is not None:
+        return _pipeline
+
     from pyannote.audio import Pipeline
 
     if not hf_token:
@@ -48,6 +58,14 @@ def diarize(wav_path, hf_token, num_speakers=None, show_progress=True):
         pipeline.to(torch.device("cuda"))
     elif getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
         pipeline.to(torch.device("mps"))
+
+    _pipeline = pipeline
+    return pipeline
+
+
+def diarize(wav_path, hf_token, num_speakers=None, show_progress=True):
+    """Renvoie une liste de tours de parole : [(debut, fin, label), ...]."""
+    pipeline = load_pipeline(hf_token)
 
     kwargs = {}
     if num_speakers:

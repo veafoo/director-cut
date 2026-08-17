@@ -1,6 +1,16 @@
+_models = {}
+
+
 def load_model(model_size="small"):
-    from faster_whisper import WhisperModel
-    return WhisperModel(model_size, device="auto", compute_type="auto")
+    """Charge le modèle de transcription, une fois par taille demandée.
+
+    Comme la diarisation, il ne dépend pas de la vidéo : sur un lot, un seul
+    chargement suffit."""
+    if model_size not in _models:
+        from faster_whisper import WhisperModel
+        _models[model_size] = WhisperModel(model_size, device="auto",
+                                           compute_type="auto")
+    return _models[model_size]
 
 
 def transcribe_all(wav_path, model=None, model_size="small", lang="fr",

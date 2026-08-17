@@ -1,4 +1,6 @@
 """_to_turns doit absorber les différences d'API entre pyannote 3.x et 4.x."""
+import pytest
+
 from director_cut import diarize
 
 
@@ -60,3 +62,38 @@ def test_diarize_requires_a_token():
         assert "Hugging Face" in str(e)
     else:
         raise AssertionError("un token manquant doit lever une RuntimeError")
+
+
+# --- le modèle est partagé entre les vidéos -------------------------------
+
+def test_the_pipeline_is_loaded_once_for_the_whole_batch(monkeypatch):
+    """Sur un lot, recharger le modèle à chaque vidéo est du temps perdu."""
+    charges = []
+
+    class FakePipeline:
+        def to(self, dev):
+            return self
+
+        def __call__(self, wav, **kw):
+            return Annotation3x()
+
+    def fake_from_pretrained(name, **kw):
+        charges.append(name)
+        return FakePipeline()
+
+    import sys
+    import types
+    fake = types.ModuleType("pyannote.audio")
+    fake.Pipeline = types.SimpleNamespace(from_pretrained=fake_from_pretrained)
+    monkeypatch.setitem(sys.modules, "pyannote.audio", fake)
+    monkeypatch.setattr(diarize, "_pipeline", None)
+
+    for _ in range(3):
+        diarize.diarize("x.wav", "token", show_progress=False)
+    assert len(charges) == 1
+
+
+def test_a_missing_token_is_still_refused(monkeypatch):
+    monkeypatch.setattr(diarize, "_pipeline", None)
+    with pytest.raises(RuntimeError, match="Hugging Face"):
+        diarize.load_pipeline(None)
