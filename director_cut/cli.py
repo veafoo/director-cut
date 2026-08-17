@@ -130,6 +130,9 @@ def cli():
 @click.option("--num-speakers", default=None, type=int)
 @click.option("--pad", default=1.0, type=float)
 @click.option("--min-len", default=3.0, type=float)
+@click.option("--keep-reruns", is_flag=True,
+              help="Garde les rediffusions. Par défaut, un sujet repassé\n"
+                   "plusieurs fois dans la journée n'est sorti qu'une fois.")
 @click.option("--min-turn", default=1.5, type=float,
               help="Durée mini d'une prise de parole pour compter (écarte les parasites de diarisation).")
 @click.option("--lookback", default=40.0, type=float,
@@ -167,7 +170,7 @@ def cli():
 @click.option("--workers", default=3, type=int, help="Tâches en parallèle.")
 @click.option("--hf-token", default=None, help="Défaut: .hf_token ou HF_TOKEN.")
 def run_cmd(url, mode, merge_gap, out, ref, names, threshold, num_speakers, pad,
-            min_len, min_turn, lookback, launch_gap, precut, end_trim, fast,
+            min_len, min_turn, keep_reruns, lookback, launch_gap, precut, end_trim, fast,
             shots_n, brand, sharpen, strip_furniture, retouche, screens_on, no_mkv,
             no_transcript, whisper_size, workers, hf_token):
     """Traite une URL ou un fichier vidéo local et découpe les passages.
@@ -180,7 +183,7 @@ def run_cmd(url, mode, merge_gap, out, ref, names, threshold, num_speakers, pad,
     try:
         with lock.Lock(out):
             _run(console, url, mode, merge_gap, out, ref, names, threshold,
-                 num_speakers, pad, min_len, min_turn, lookback, launch_gap,
+                 num_speakers, pad, min_len, min_turn, keep_reruns, lookback, launch_gap,
                  precut, end_trim, fast, shots_n, brand, sharpen, strip_furniture,
                  retouche, screens_on, no_mkv, no_transcript, whisper_size,
                  workers, hf_token)
@@ -189,7 +192,7 @@ def run_cmd(url, mode, merge_gap, out, ref, names, threshold, num_speakers, pad,
 
 
 def _run(console, url, mode, merge_gap, out, ref, names, threshold,
-         num_speakers, pad, min_len, min_turn, lookback, launch_gap, precut,
+         num_speakers, pad, min_len, min_turn, keep_reruns, lookback, launch_gap, precut,
          end_trim, fast, shots_n, brand, sharpen, strip_furniture, retouche, screens_on,
          no_mkv, no_transcript, whisper_size, workers, hf_token):
     workdir = os.getcwd()
@@ -315,6 +318,13 @@ def _run(console, url, mode, merge_gap, out, ref, names, threshold,
                            else "nom non vu (lancement pris quand même)")
 
     final = segments.drop_short(final, min_len)
+    if not keep_reruns and fr_tx:
+        final, reruns = segments.drop_reruns(final, fr_tx)
+        if reruns:
+            ui.info(console, f"{len(reruns)} rediffusion(s) du même sujet "
+                             "écartée(s) — " + ", ".join(
+                                 f"{s / 60:.0f}min" for s, _ in reruns)
+                             + " (--keep-reruns pour les garder)")
     if not final:
         raise click.ClickException("Aucun passage retenu après filtrage.")
 
