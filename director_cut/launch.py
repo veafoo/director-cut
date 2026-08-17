@@ -13,6 +13,7 @@ MARGIN = 0.15
 MIN_TURN = 1.5
 
 
+
 def _norm(s):
     s = unicodedata.normalize("NFKD", s)
     s = "".join(c for c in s if not unicodedata.combining(c))
@@ -87,6 +88,31 @@ def _sentence_at_or_after(transcript, t):
     return starts[0] if starts else None
 
 
+def presenter(all_turns, her_label, min_turn=MIN_TURN, buckets=10):
+    """La voix du présentateur : celle qui revient tout au long de l'émission.
+
+    Ce n'est pas celle qui parle le plus longtemps — un interviewé peut tenir
+    trois minutes d'affilée sans jamais reparaître. C'est celle qu'on retrouve
+    à l'ouverture, entre chaque sujet et à la clôture. On découpe donc la durée
+    en tranches et on retient la voix présente dans le plus de tranches, le
+    temps de parole ne servant qu'à départager.
+    """
+    spans = {}
+    for start, end, lab in all_turns:
+        if lab != her_label and end - start >= min_turn:
+            spans.setdefault(lab, []).append((start, end))
+    if not spans:
+        return None
+    total = max((e for _, e, _ in all_turns), default=0.0) or 1.0
+
+    def spread(lab):
+        segs = spans[lab]
+        seen = {int(buckets * st / total) for st, _ in segs}
+        return len(seen), sum(e - st for st, e in segs)
+
+    return max(spans, key=spread)
+
+
 def launch_start(all_turns, her_label, block_start, cuts,
                  max_lookback=40.0, launch_gap=10.0, precut_window=5.0,
                  transcript=None, names=(), min_turn=MIN_TURN):
@@ -107,9 +133,13 @@ def launch_start(all_turns, her_label, block_start, cuts,
     générique, un reportage précédent ou un silence le coupent naturellement.
     """
     floor = block_start - max_lookback
+    host = presenter(all_turns, her_label, min_turn)
     before = [(s, e) for s, e, lab in all_turns
-              if lab != her_label and e <= block_start + 0.01
+              if lab == host and e <= block_start + 0.01
               and e - s >= min_turn]
+    # Le présentateur doit rester dans les parages : au-delà, ce qu'on
+    # trouverait appartient à un autre sujet.
+    before = [t for t in before if block_start - t[1] <= max_lookback]
     if not before:
         # Personne ne parle avant elle : on démarre sur le plan où elle
         # apparaît, sans remonter dans ce qui précède.
@@ -118,13 +148,17 @@ def launch_start(all_turns, her_label, block_start, cuts,
         prev = [c for c in sorted(cuts or []) if floor <= c <= block_start]
         return max(prev) if prev else max(floor, block_start - 0.5)
 
-    anchor = max(before, key=lambda t: t[1])[0]
-    if anchor < floor:
-        # Tour trop long pour être pris en entier (il couvre les sujets d'avant).
-        # On coupe au plafond, mais jamais en plein milieu d'une phrase.
-        anchor = _sentence_at_or_after(transcript, floor) or floor
+    first, last = max(before, key=lambda t: t[1])
+    anchor = first
+    if last - first > max_lookback:
+        # Annonce trop longue pour être prise en entier : le présentateur
+        # enchaîne plusieurs sujets sans respirer. Le plafond porte sur la
+        # longueur de l'annonce, pas sur la distance à sa première parole —
+        # entre les deux il y a souvent une interview, qui fait partie du sujet.
+        cut = last - max_lookback
+        anchor = _sentence_at_or_after(transcript, cut) or cut
         if anchor >= block_start:
-            anchor = floor
+            anchor = cut
     return _lead_in(anchor, transcript)
 
 
@@ -146,13 +180,14 @@ def reportage_end(all_turns, her_label, block_end, cuts, precut_window=5.0,
     Le retour plateau est un changement de plan, pas une prise de parole : le
     présentateur réapparaît une bonne seconde avant de parler. Viser « juste
     avant qu'il ne parle » montrait donc le plateau à tous les coups. On vise
-    le plan qui ramène le plateau, et on s'arrête dessus."""
+    donc le plan qui le ramène.
+
+    donc le plan qui le ramène."""
     end_of_speech = last_word(all_turns, her_label, block_end)
     ahead = [c for c in sorted(cuts or [])
              if end_of_speech - 0.05 <= c <= end_of_speech + forward]
-    if ahead:
-        return ahead[0]
-    return max(end_of_speech, block_end)
+    end = ahead[0] if ahead else max(end_of_speech, block_end)
+    return max(end, end_of_speech)
 
 
 def chronique_end(all_turns, her_label, block_end, cuts,

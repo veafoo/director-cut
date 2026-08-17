@@ -95,12 +95,14 @@ def test_a_crumb_of_diarization_is_not_taken_for_the_launch():
     assert launch.launch_start(turns, HER, 30.0, CUTS) <= 20.0
 
 
-def test_a_turn_longer_than_the_lookback_is_capped():
-    # Un présentateur qui enchaîne les sujets : on ne remonte pas dans le
-    # sujet d'avant.
+def test_a_long_announcement_is_capped_on_its_own_length():
+    # Un présentateur qui enchaîne les sujets sans respirer : on ne garde que
+    # la fin de son tour. Le plafond porte sur la longueur de l'annonce, pas
+    # sur la distance à sa première parole.
     turns = [(40.0, 89.0, PRES), (90.0, 150.0, HER)]
     start = launch.launch_start(turns, HER, 90.0, [], max_lookback=10.0)
-    assert start >= 80.0 - launch.LEAD_IN
+    assert 89.0 - start == pytest.approx(10.0 + launch.LEAD_IN, abs=0.01)
+    assert start > 40.0
 
 
 def test_the_cap_never_lands_in_the_middle_of_a_sentence():
@@ -312,3 +314,76 @@ def test_the_rule_holds_without_any_transcript():
                                  transcript=P2_TEXT)[0]
         sans = launch.build_span("reportage", turns, HER, bs, be, cuts=cuts)[0]
         assert abs(avec - sans) <= launch.MARGIN + 0.01
+
+
+# --- identifier le présentateur -------------------------------------------
+
+def test_the_presenter_is_the_voice_that_keeps_coming_back():
+    # Ouverture, entre les sujets, clôture : c'est lui.
+    turns = [(0.0, 20.0, PRES), (200.0, 220.0, PRES), (400.0, 420.0, PRES),
+             (30.0, 190.0, "INVITE"), (250.0, 300.0, HER)]
+    assert launch.presenter(turns, HER) == PRES
+
+
+def test_a_long_interview_is_not_taken_for_the_presenter():
+    # L'interviewé parle trois minutes d'affilée, plus que le présentateur
+    # au total, mais ne réapparaît jamais.
+    turns = [(0.0, 10.0, PRES), (200.0, 210.0, PRES), (400.0, 410.0, PRES),
+             (20.0, 200.0, "INVITE"), (250.0, 300.0, HER)]
+    invite = sum(e - s for s, e, l in turns if l == "INVITE")
+    presentateur = sum(e - s for s, e, l in turns if l == PRES)
+    assert invite > presentateur          # il parle plus…
+    assert launch.presenter(turns, HER) == PRES   # …mais ce n'est pas lui
+
+
+def test_crumbs_are_never_the_presenter():
+    turns = [(0.0, 20.0, PRES), (10.0, 10.2, "BRUIT"), (50.0, 50.1, "BRUIT"),
+             (90.0, 90.1, "BRUIT"), (100.0, 150.0, HER)]
+    assert launch.presenter(turns, HER) == PRES
+
+
+def test_without_anyone_else_there_is_no_presenter():
+    assert launch.presenter([(0.0, 50.0, HER)], HER) is None
+
+
+# --- régression : le reportage s'ouvre sur une interview -------------------
+#
+# Troisième JT. Le sujet démarre par une phrase de l'interviewé, avant la voix
+# off de la journaliste. « Le dernier tour de parole de quelqu'un d'autre »
+# tombait donc sur l'interviewé, en plein reportage, et l'annonce sautait.
+# Le retour plateau, lui, n'a pas été vu par la détection de plans.
+
+P3_TURNS = [
+    (3.4, 37.9, PRES), (61.5, 78.9, PRES),      # il revient tout au long
+    (176.5, 200.8, PRES),
+    (202.1, 224.8, PRES),                        # l'annonce de SON sujet
+    (226.2, 234.1, "MEDECIN"),                   # le sujet ouvre sur l'interview
+    (240.9, 242.7, "MEDECIN"),
+    (243.5, 246.7, HER), (246.9, 251.4, HER),    # sa voix off
+    (251.8, 269.0, "MEDECIN"),
+    (269.1, 274.0, HER), (274.7, 277.0, HER),
+    (279.7, 282.7, HER), (298.0, 302.6, HER),
+    (302.9, 320.3, "MEDECIN"),
+    (320.6, 325.9, HER),                         # sa dernière parole
+    (331.2, 348.4, PRES),                        # le plateau est revenu
+    (444.3, 494.2, PRES),
+]
+# La détection de plans a manqué le retour plateau : rien entre 325 et 337.
+P3_CUTS = [180.0, 202.0, 226.0, 243.0, 337.8, 340.6]
+
+
+def test_the_launch_is_not_taken_from_an_interviewee():
+    bs, be = _blocks(P3_TURNS)[0]
+    start, _, _ = launch.build_span("reportage", P3_TURNS, HER, bs, be,
+                                    cuts=P3_CUTS, max_lookback=40.0)
+    assert 201.0 <= start <= 202.2      # l'annonce du présentateur
+    assert start < 226.2                # pas dans le reportage
+
+
+def test_the_announcement_is_reachable_beyond_the_lookback_from_her_voice():
+    # L'annonce commence 41 s avant sa première parole, à cause de l'interview
+    # qui ouvre le sujet. Un plafond compté depuis sa voix la manquerait.
+    bs, _ = _blocks(P3_TURNS)[0]
+    assert bs - 202.1 > 40.0
+    start = launch.launch_start(P3_TURNS, HER, bs, P3_CUTS, max_lookback=40.0)
+    assert start <= 202.2
