@@ -71,15 +71,22 @@ if [ -z "$ICI" ] || [ ! -f "$ICI/pyproject.toml" ]; then
         ok "déjà présent dans $CIBLE"
     else
         info "Téléchargement dans $CIBLE"
-        if command -v git >/dev/null 2>&1; then
-            git clone --depth 1 "$DEPOT" "$CIBLE"
+        # Attention : sur un Mac neuf, /usr/bin/git EXISTE mais n'est qu'une
+        # amorce qui réclame les outils Apple. `command -v git` répond donc oui
+        # alors que git ne marche pas. On teste ce que git fait, pas sa présence,
+        # et on retombe sur l'archive au moindre échec. curl et tar, eux, sont
+        # livrés avec macOS et n'ont besoin de rien.
+        if git --version >/dev/null 2>&1 &&
+           git clone --depth 1 "$DEPOT" "$CIBLE" 2>/dev/null; then
+            ok "projet récupéré (git clone — les mises à jour se feront par git pull)"
         else
-            # Pas de git sur un Mac neuf : une archive suffit.
+            rm -rf "$CIBLE"
             mkdir -p "$CIBLE"
             curl -fsSL "$DEPOT/archive/refs/heads/main.tar.gz" \
                 | tar -xz -C "$CIBLE" --strip-components=1
+            [ -f "$CIBLE/pyproject.toml" ] || stop "le téléchargement du projet a échoué. Vérifier la connexion internet."
+            ok "projet récupéré (archive, sans git)"
         fi
-        ok "projet récupéré"
     fi
     exec bash "$CIBLE/install.sh"
 fi
