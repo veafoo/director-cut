@@ -137,6 +137,18 @@ director-cut run "URL" --mode chronique
 director-cut run "URL" --mode jt
 ```
 
+Plusieurs vidéos d'un coup — chacune produit son propre dossier :
+```bash
+director-cut run "URL1" "URL2" "URL3" --mode reportage
+```
+
+Elles sont traitées l'une après l'autre. Si l'une échoue (lien mort, vidéo
+indisponible), les autres continuent : le message dit laquelle a échoué et
+pourquoi, et le compte final indique combien sont passées.
+
+Deux vidéos du même jour ne s'écrasent pas : la seconde est numérotée
+(`extract_reportage_2026-08-12`, puis `extract_2_reportage_2026-08-12`).
+
 Lien impossible à télécharger → fichier local :
 ```bash
 director-cut run "video_du_jt.mp4" --mode reportage

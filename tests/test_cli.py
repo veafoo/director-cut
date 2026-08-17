@@ -200,3 +200,79 @@ def test_thumbnails_need_an_explicit_flag():
     param = next(p for p in cli.run_cmd.params if p.name == "screens_on")
     assert param.default is False
     assert "--screens" in param.opts and "--no-screens" in param.secondary_opts
+
+
+# --- plusieurs vidéos dans une commande -----------------------------------
+
+def test_the_run_command_takes_several_sources():
+    param = next(p for p in cli.run_cmd.params if p.name == "urls")
+    assert param.nargs == -1
+    assert param.required
+
+
+def test_each_source_gets_its_own_folder():
+    taken = set()
+    a = cli._free_run_dir("sortie", "reportage", "https://x.fr/jt-20260812.html", taken)
+    b = cli._free_run_dir("sortie", "reportage", "https://x.fr/jt-20260813.html", taken)
+    assert a.endswith("extract_reportage_2026-08-12")
+    assert b.endswith("extract_reportage_2026-08-13")
+
+
+def test_two_videos_of_the_same_day_do_not_overwrite_each_other():
+    taken = set()
+    noms = [os.path.basename(
+        cli._free_run_dir("sortie", "reportage", f"https://x.fr/jt-20260812-{n}.html",
+                          taken)) for n in "abc"]
+    assert noms == ["extract_reportage_2026-08-12",
+                    "extract_2_reportage_2026-08-12",
+                    "extract_3_reportage_2026-08-12"]
+
+
+def test_running_the_same_url_again_falls_back_on_its_folder():
+    # Une nouvelle commande repart d'un jeu de noms vierge : pas de _2 parasite.
+    url = "https://x.fr/jt-20260812.html"
+    premier = cli._free_run_dir("sortie", "reportage", url, set())
+    second = cli._free_run_dir("sortie", "reportage", url, set())
+    assert premier == second
+
+
+def test_the_mode_is_part_of_the_folder_name():
+    taken = set()
+    url = "https://x.fr/jt-20260812.html"
+    a = cli._free_run_dir("sortie", "reportage", url, taken)
+    b = cli._free_run_dir("sortie", "chronique", url, taken)
+    assert a != b and "chronique" in b
+
+
+# --- un échec ne doit pas laisser de trace --------------------------------
+
+def test_an_empty_folder_left_by_a_failed_run_is_removed(tmp_path):
+    d = tmp_path / "extract_reportage_2026-08-17"
+    (d / "raw").mkdir(parents=True)
+    (d / "passages").mkdir()
+    assert cli._forget(str(d))
+    assert not d.exists()
+
+
+def test_a_folder_that_produced_something_is_never_removed(tmp_path):
+    d = tmp_path / "extract_reportage_2026-08-17"
+    (d / "passages").mkdir(parents=True)
+    (d / "passages" / "passage_01.mp4").write_bytes(b"x")
+    assert not cli._forget(str(d))
+    assert (d / "passages" / "passage_01.mp4").exists()
+
+
+def test_a_stray_ds_store_does_not_pass_for_a_result(tmp_path):
+    d = tmp_path / "extract_reportage_2026-08-17"
+    (d / "raw").mkdir(parents=True)
+    (d / "raw" / ".DS_Store").write_bytes(b"x")
+    assert cli._forget(str(d))
+
+
+def test_forgetting_a_folder_that_was_never_created():
+    assert cli._forget("/chemin/qui/n/existe/pas")
+
+
+def test_the_label_stays_short_and_readable():
+    assert cli._label("https://x.fr/replay/jt-du-12-aout.html") == "jt-du-12-aout.html"
+    assert len(cli._label("https://x.fr/" + "a" * 200)) <= 71

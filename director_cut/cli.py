@@ -135,7 +135,7 @@ def cli():
 
 
 @cli.command("run")
-@click.argument("url")
+@click.argument("urls", nargs=-1, required=True)
 @click.option("--mode", type=click.Choice(["chronique", "reportage", "jt"]),
               default="chronique",
               help="chronique = plateau -> annonce du sujet suivant ; "
@@ -194,29 +194,93 @@ def cli():
 @click.option("--whisper-size", default="small")
 @click.option("--workers", default=3, type=int, help="Tâches en parallèle.")
 @click.option("--hf-token", default=None, help="Défaut: .hf_token ou HF_TOKEN.")
-def run_cmd(url, mode, merge_gap, out, ref, names, threshold, num_speakers, pad,
+def run_cmd(urls, mode, merge_gap, out, ref, names, threshold, num_speakers, pad,
             min_len, min_turn, keep_reruns, delete_source, lookback, launch_gap, precut, end_trim, fast,
             shots_n, brand, sharpen, strip_furniture, retouche, screens_on, no_mkv,
             no_transcript, whisper_size, workers, hf_token):
-    """Traite une URL ou un fichier vidéo local et découpe les passages.
+    """Traite une ou plusieurs vidéos et découpe les passages.
 
-    Usage : director-cut run "URL"   ou   director-cut run "/chemin/vers/video.mp4" """
+    Chaque URL (ou fichier local) produit son propre dossier d'extraction.
+
+    Usage : director-cut run "URL" ["URL2" …]
+            director-cut run "/chemin/vers/video.mp4" """
     console = Console()
     ui.splash(console)
 
     os.makedirs(out, exist_ok=True)
+    taken, done, failed = set(), [], []
     try:
         with lock.Lock(out):
-            _run(console, url, mode, merge_gap, out, ref, names, threshold,
-                 num_speakers, pad, min_len, min_turn, keep_reruns, delete_source, lookback, launch_gap,
-                 precut, end_trim, fast, shots_n, brand, sharpen, strip_furniture,
-                 retouche, screens_on, no_mkv, no_transcript, whisper_size,
-                 workers, hf_token)
+            for i, url in enumerate(urls, 1):
+                if len(urls) > 1:
+                    console.rule(f"[bold cyan]{i}/{len(urls)}[/] {_label(url)}")
+                run_dir = _free_run_dir(out, mode, url, taken)
+                try:
+                    _run(console, url, mode, merge_gap, out, run_dir, ref, names,
+                         threshold, num_speakers, pad, min_len, min_turn,
+                         keep_reruns, delete_source, lookback, launch_gap,
+                         precut, end_trim, fast, shots_n, brand, sharpen,
+                         strip_furniture, retouche, screens_on, no_mkv,
+                         no_transcript, whisper_size, workers, hf_token)
+                    done.append(url)
+                except Exception as e:                   # noqa: BLE001
+                    # Une vidéo qui échoue ne doit pas emporter les suivantes :
+                    # sur une série, le travail déjà fait doit rester acquis.
+                    failed.append((url, e))
+                    ui.info(console, f"[red]{_label(url)} : {e}[/]")
+                    # Ni laisser un dossier vide derrière elle, ni décaler la
+                    # numérotation des suivantes.
+                    if _forget(run_dir):
+                        taken.discard(run_dir)
     except lock.Busy as e:
         raise click.ClickException(str(e))
 
+    if len(urls) > 1:
+        console.print(f"\n[bold]{len(done)}/{len(urls)} vidéo(s) traitée(s).[/]")
+    if failed and not done:
+        raise click.ClickException("Aucune vidéo n'a pu être traitée.")
 
-def _run(console, url, mode, merge_gap, out, ref, names, threshold,
+
+def _forget(run_dir):
+    """Supprime le dossier d'un run raté, s'il n'a rien produit.
+
+    Le run crée ses sous-dossiers avant de travailler : après un échec précoce,
+    il reste une arborescence vide. On ne l'efface que si elle ne contient
+    aucun fichier — la moindre sortie déjà produite fait tout garder."""
+    import shutil
+    if not os.path.isdir(run_dir):
+        return True
+    for _, _, files in os.walk(run_dir):
+        if any(f != ".DS_Store" for f in files):
+            return False
+    shutil.rmtree(run_dir, ignore_errors=True)
+    return not os.path.exists(run_dir)
+
+
+def _label(url):
+    """Nom court d'une source, pour les messages."""
+    name = url.rstrip("/").split("/")[-1] or url
+    return name[:70] + ("…" if len(name) > 70 else "")
+
+
+def _free_run_dir(out, mode, url, taken):
+    """Dossier du run, unique au sein d'une même commande.
+
+    Deux vidéos du même jour donneraient le même nom : la seconde écraserait
+    la première. On numérote donc, mais seulement en cas de vraie collision —
+    relancer une même URL doit continuer à retomber sur son dossier.
+
+    extract_reportage_2026-08-12, puis extract_2_reportage_2026-08-12."""
+    date = _guess_date(url)
+    path, n = os.path.join(out, f"extract_{mode}_{date}"), 1
+    while path in taken:
+        n += 1
+        path = os.path.join(out, f"extract_{n}_{mode}_{date}")
+    taken.add(path)
+    return path
+
+
+def _run(console, url, mode, merge_gap, out, run_dir, ref, names, threshold,
          num_speakers, pad, min_len, min_turn, keep_reruns, delete_source, lookback, launch_gap, precut,
          end_trim, fast, shots_n, brand, sharpen, strip_furniture, retouche, screens_on,
          no_mkv, no_transcript, whisper_size, workers, hf_token):
@@ -256,7 +320,6 @@ def _run(console, url, mode, merge_gap, out, ref, names, threshold,
     # l'audio y descendent. Partagés entre les runs, ils faisaient travailler
     # un run sur la source d'un autre — yt-dlp voyait un video.mp4 déjà là et
     # ne retéléchargeait pas.
-    run_dir = os.path.join(out, f"extract_{mode}_{_guess_date(url)}")
     os.makedirs(run_dir, exist_ok=True)
 
     is_local = os.path.exists(url) and url.lower().endswith(download.VIDEO_EXTS)
