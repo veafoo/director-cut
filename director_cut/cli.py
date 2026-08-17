@@ -224,12 +224,19 @@ def _run(console, url, mode, merge_gap, out, ref, names, threshold,
 
     _ensure_reference(console, ref, workdir, hf_token)
 
+    # Le dossier du run est fixé AVANT le téléchargement : la vidéo source et
+    # l'audio y descendent. Partagés entre les runs, ils faisaient travailler
+    # un run sur la source d'un autre — yt-dlp voyait un video.mp4 déjà là et
+    # ne retéléchargeait pas.
+    run_dir = os.path.join(out, f"extract_{mode}_{_guess_date(url)}")
+    os.makedirs(run_dir, exist_ok=True)
+
     is_local = os.path.exists(url) and url.lower().endswith(download.VIDEO_EXTS)
     ui.step(console, 1, 6, "Vidéo locale…" if is_local else "Téléchargement…")
-    video = download.get_video(url, os.path.join(out, "raw"))
+    video = download.get_video(url, os.path.join(run_dir, "raw"))
 
     ui.step(console, 2, 6, "Extraction audio…")
-    wav = audio.extract_wav(video, os.path.join(out, "audio.wav"))
+    wav = audio.extract_wav(video, os.path.join(run_dir, "audio.wav"))
 
     ui.step(console, 3, 6, "Diarisation (qui parle quand)…")
     diar = diarize.diarize(wav, hf_token, num_speakers)
@@ -315,9 +322,7 @@ def _run(console, url, mode, merge_gap, out, ref, names, threshold,
     ui.detection_summary(console, mode, label, scores[label], thr,
                          len(final), total_kept, name_status)
 
-    # Dossier propre au run, un sous-dossier par type
-    date = _guess_date(url)
-    run_dir = os.path.join(out, f"extract_{mode}_{date}")
+    # Un sous-dossier par type de sortie
     # Un dossier par type de sortie, et uniquement pour ce qu'on produit :
     # un dossier vide laisse croire que la sortie a échoué.
     kinds = ["passages", "audio"]
