@@ -86,6 +86,28 @@ def _ensure_reference(console, ref, workdir, hf_token):
                          f"seuil auto-calibré {thr:.2f}")
 
 
+def _tidy_source(console, video, is_local, delete_source):
+    """La vidéo source pèse souvent plus lourd que toutes les sorties réunies.
+
+    On ne supprime jamais un fichier que la personne nous a fourni : seul ce que
+    l'outil a téléchargé peut partir."""
+    try:
+        size = os.path.getsize(video) / 1e9
+    except OSError:
+        return
+    if is_local:
+        return
+    if delete_source:
+        try:
+            os.remove(video)
+            ui.info(console, f"vidéo source supprimée ({size:.1f} Go libérés)")
+        except OSError as e:
+            ui.info(console, f"vidéo source non supprimée : {e}")
+    elif size >= 0.5:
+        ui.info(console, f"vidéo source conservée ({size:.1f} Go) — "
+                         "--delete-source pour la supprimer en fin de run")
+
+
 def _retouche_opts(console, template):
     """Ce que la retouche IA peut faire ici, vu les modèles installés.
 
@@ -130,6 +152,9 @@ def cli():
 @click.option("--num-speakers", default=None, type=int)
 @click.option("--pad", default=1.0, type=float)
 @click.option("--min-len", default=3.0, type=float)
+@click.option("--delete-source", is_flag=True,
+              help="Supprime la vidéo source à la fin. Elle pèse souvent\n"
+                   "plus lourd que tout le reste et se retélécharge.")
 @click.option("--keep-reruns", is_flag=True,
               help="Garde les rediffusions. Par défaut, un sujet repassé\n"
                    "plusieurs fois dans la journée n'est sorti qu'une fois.")
@@ -170,7 +195,7 @@ def cli():
 @click.option("--workers", default=3, type=int, help="Tâches en parallèle.")
 @click.option("--hf-token", default=None, help="Défaut: .hf_token ou HF_TOKEN.")
 def run_cmd(url, mode, merge_gap, out, ref, names, threshold, num_speakers, pad,
-            min_len, min_turn, keep_reruns, lookback, launch_gap, precut, end_trim, fast,
+            min_len, min_turn, keep_reruns, delete_source, lookback, launch_gap, precut, end_trim, fast,
             shots_n, brand, sharpen, strip_furniture, retouche, screens_on, no_mkv,
             no_transcript, whisper_size, workers, hf_token):
     """Traite une URL ou un fichier vidéo local et découpe les passages.
@@ -183,7 +208,7 @@ def run_cmd(url, mode, merge_gap, out, ref, names, threshold, num_speakers, pad,
     try:
         with lock.Lock(out):
             _run(console, url, mode, merge_gap, out, ref, names, threshold,
-                 num_speakers, pad, min_len, min_turn, keep_reruns, lookback, launch_gap,
+                 num_speakers, pad, min_len, min_turn, keep_reruns, delete_source, lookback, launch_gap,
                  precut, end_trim, fast, shots_n, brand, sharpen, strip_furniture,
                  retouche, screens_on, no_mkv, no_transcript, whisper_size,
                  workers, hf_token)
@@ -192,7 +217,7 @@ def run_cmd(url, mode, merge_gap, out, ref, names, threshold, num_speakers, pad,
 
 
 def _run(console, url, mode, merge_gap, out, ref, names, threshold,
-         num_speakers, pad, min_len, min_turn, keep_reruns, lookback, launch_gap, precut,
+         num_speakers, pad, min_len, min_turn, keep_reruns, delete_source, lookback, launch_gap, precut,
          end_trim, fast, shots_n, brand, sharpen, strip_furniture, retouche, screens_on,
          no_mkv, no_transcript, whisper_size, workers, hf_token):
     workdir = os.getcwd()
@@ -403,6 +428,8 @@ def _run(console, url, mode, merge_gap, out, ref, names, threshold,
             "Aucun passage n'a pu être produit. La cause est au-dessus ; si "
             "c'est un fichier introuvable, la vidéo source a disparu en cours "
             "de route — relance, elle sera retéléchargée.")
+
+    _tidy_source(console, video, is_local, delete_source)
 
     console.print(f"\n[bold green]Terminé.[/] "
                   f"{len(done)}/{len(final)} passage(s) dans : [green]{run_dir}[/]")
