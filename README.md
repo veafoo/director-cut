@@ -65,19 +65,25 @@ partent dans le dépôt.
 
 ### Sur Mac : une seule commande
 
+Sur une machine où il n'y a **rien** — pas même le projet :
+
 ```bash
-cd director-cut
-./install.sh
+curl -fsSL https://raw.githubusercontent.com/veafoo/director-cut/main/install.sh | bash
 ```
 
-Le script vérifie et installe ce qui manque (ffmpeg, Python 3.10+ — celui livré
-avec macOS est trop ancien), crée l'environnement, guide la création du token
-Hugging Face **et vérifie qu'il ouvre bien les trois modèles**, puis écrit un
-raccourci `./decoupe`. Il peut être relancé sans risque : les étapes déjà faites
-sont sautées.
+Si le projet est déjà là : `cd director-cut && ./install.sh`.
+
+Le script regarde ce qu'il y a sur la machine et n'installe que ce qui manque :
+outils Apple, Homebrew, ffmpeg, Python 3.10+ (celui livré avec macOS est trop
+ancien), environnement du projet. Il guide la création du token Hugging Face
+**et vérifie qu'il ouvre bien les trois modèles** au lieu de le supposer. Il peut
+être relancé autant de fois que voulu.
+
+À la fin, dans une nouvelle fenêtre Terminal, la commande marche depuis
+n'importe où :
 
 ```bash
-./decoupe run "https://www.exemple.fr/…/replay.html" --mode reportage
+director-cut run "https://www.exemple.fr/…/replay.html" --mode reportage
 ```
 
 ### À la main (ou sur Windows)
