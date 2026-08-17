@@ -63,8 +63,9 @@ demander() {
 # Lancé par `curl | bash`, BASH_SOURCE est vide : il n'y a pas de dossier autour.
 ICI="$(cd "$(dirname "${BASH_SOURCE[0]:-.}")" 2>/dev/null && pwd || echo "")"
 
+printf '\n%s%sInstallation de director-cut%s\n' "$GRAS" "$BLEU" "$RAZ"
+
 if [ -z "$ICI" ] || [ ! -f "$ICI/pyproject.toml" ]; then
-    printf '\n%s%sInstallation de director-cut%s\n' "$GRAS" "$BLEU" "$RAZ"
     titre "Récupération du projet"
     CIBLE="$DOSSIER_PAR_DEFAUT"
     if [ -f "$CIBLE/pyproject.toml" ]; then
@@ -88,12 +89,14 @@ if [ -z "$ICI" ] || [ ! -f "$ICI/pyproject.toml" ]; then
             ok "projet récupéré (archive, sans git)"
         fi
     fi
-    exec bash "$CIBLE/install.sh"
+    # On continue dans le même processus, sans relancer le install.sh du projet
+    # téléchargé : rien ne garantit qu'il y en ait un (le script peut venir
+    # d'une branche pendant que le projet vient de main), et de toute façon la
+    # version qu'on est en train d'exécuter est celle que la personne a lancée.
+    ICI="$CIBLE"
 fi
 
 cd "$ICI"
-
-printf '\n%s%sInstallation de director-cut%s\n' "$GRAS" "$BLEU" "$RAZ"
 info "Dossier : $(pwd)"
 [ -n "$CLAVIER" ] || info "Mode non interactif : toute question sera considérée comme un non."
 
@@ -149,7 +152,7 @@ installer_homebrew() {
     fi
     NONINTERACTIVE=1 /bin/bash -c \
         "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-    activer_brew_existant || stop "Homebrew s'est installé mais reste introuvable. Ferme le Terminal, rouvre-le, et relance ./install.sh"
+    activer_brew_existant || stop "Homebrew s'est installé mais reste introuvable. Ferme le Terminal, rouvre-le, et relance l'installation."
 }
 
 # -------------------------------------------------------------------- ffmpeg --
@@ -377,7 +380,7 @@ fi
 
 titre "Vérification"
 
-.venv/bin/director-cut --help >/dev/null || stop "director-cut ne répond pas. Relance ./install.sh"
+.venv/bin/director-cut --help >/dev/null || stop "director-cut ne répond pas. Relance l'installation."
 ok "director-cut répond"
 ffmpeg -version >/dev/null 2>&1 && ok "ffmpeg répond"
 [ "$TOKEN_OK" = true ] && ok "accès aux modèles de voix vérifié"
@@ -388,7 +391,7 @@ if [ "$TOKEN_OK" = true ] && [ "$VOIX_OK" = true ]; then
     printf '\n%s%sTout est prêt.%s\n' "$GRAS" "$VERT" "$RAZ"
 else
     printf '\n%s%sPresque prêt.%s\n' "$GRAS" "$ROUGE" "$RAZ"
-    [ "$TOKEN_OK" = true ] || printf '  Il manque le token Hugging Face (relancer ./install.sh une fois créé).\n'
+    [ "$TOKEN_OK" = true ] || printf '  Il manque le token Hugging Face — le créer, puis relancer l'\''installation.\n'
     [ "$VOIX_OK" = true ]  || printf '  Il manque un extrait de voix (sample.mp4) dans %s.\n' "$(pwd)"
 fi
 
