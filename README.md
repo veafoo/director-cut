@@ -137,17 +137,59 @@ director-cut run "URL" --mode chronique
 director-cut run "URL" --mode jt
 ```
 
-Plusieurs vidéos d'un coup — chacune produit son propre dossier :
+---
+
+## Plusieurs vidéos en une commande
+
+Chaque vidéo produit son propre dossier. Elles sont traitées l'une après
+l'autre.
+
 ```bash
-director-cut run "URL1" "URL2" "URL3" --mode reportage
+director-cut run --mode reportage "URL1" "URL2" "URL3"
 ```
 
-Elles sont traitées l'une après l'autre. Si l'une échoue (lien mort, vidéo
-indisponible), les autres continuent : le message dit laquelle a échoué et
-pourquoi, et le compte final indique combien sont passées.
+### Un réglage différent par vidéo
 
-Deux vidéos du même jour ne s'écrasent pas : la seconde est numérotée
-(`extract_reportage_2026-08-12`, puis `extract_2_reportage_2026-08-12`).
+**Une option s'applique à toutes les vidéos qui la suivent**, jusqu'à ce
+qu'elle change. Posée en tête, elle vaut pour le lot entier ; glissée entre
+deux vidéos, elle ne change que la suite.
+
+```bash
+director-cut run \
+  --mode reportage URL1 \
+  --mode jt        URL2 \
+  --mode chronique URL3 URL4
+```
+
+URL1 en reportage, URL2 en JT, URL3 **et** URL4 en chronique : un mode reste
+en vigueur tant qu'un autre ne le remplace pas, on ne le répète donc que
+lorsqu'il change.
+
+La règle vaut pour toutes les options, pas seulement `--mode` :
+
+```bash
+director-cut run --threshold 0.25 --shots 6 URL1 URL2 --threshold 0.4 URL3
+```
+
+Le seuil et le nombre de vignettes valent pour les trois ; seule URL3 passe à
+0.4, en gardant `--shots 6`.
+
+Une option placée **après la dernière vidéo** ne s'appliquerait à rien : la
+commande le refuse plutôt que de l'ignorer en silence.
+
+### Ce qui se passe sur un lot
+
+- Les modèles (diarisation, transcription) sont chargés **une seule fois** pour
+  toute la commande. Sur dix vidéos, c'est neuf chargements évités.
+- Une vidéo qui échoue n'emporte pas les suivantes. Le message dit laquelle et
+  pourquoi, le run continue, et le compte final annonce `2/3 vidéo(s)
+  traitée(s)`. Il ne sort en erreur que si aucune n'est passée.
+- Deux vidéos du même jour ne s'écrasent pas : la seconde est numérotée
+  (`extract_reportage_2026-08-12`, puis `extract_2_reportage_2026-08-12`). Le
+  mode fait partie du nom, donc la même vidéo en reportage et en JT donne deux
+  dossiers distincts.
+- Relancer une URL retombe sur son dossier, plutôt que d'en créer un nouveau à
+  chaque essai.
 
 Lien impossible à télécharger → fichier local :
 ```bash
@@ -293,6 +335,9 @@ final (0 pour couper).
 | `--workers N` | Tâches en parallèle (défaut 3). |
 | `--name X` | Variante de nom en plus de `names.txt` (répétable). |
 | `--whisper-size` | `tiny`…`large-v3` pour la transcription. |
+| `--min-turn S` | Durée mini d'une prise de parole (défaut 1.5 s). Écarte les parasites de diarisation. |
+| `--keep-reruns` | Garde les rediffusions d'un même sujet (écartées par défaut). |
+| `--delete-source` | Supprime la vidéo source en fin de run. |
 | `--out DOSSIER` | Dossier de sortie racine (défaut `sortie`). |
 | `--ref FICHIER` | Emplacement de l'empreinte vocale (défaut `voix_ref.npz`). |
 
@@ -316,13 +361,78 @@ Commandes annexes :
    référence (modèle wespeaker). Le seuil est calibré automatiquement à
    l'enrôlement, en séparant la distribution de sa voix de celle des autres.
 4. **Détection de plans** — PySceneDetect liste les changements de plan.
-5. **Bornage** — c'est le cœur du projet : le début remonte jusqu'au plan
-   d'annonce du présentateur (sans jamais remonter à l'ouverture du journal), la
-   fin se cale sur le retour plateau, juste avant que le présentateur ne
-   réapparaisse.
+5. **Bornage** — le cœur du projet, détaillé ci-dessous.
 6. **Sorties** — découpe à l'image près, transcription Whisper FR + traduction
    EN, screenshots 9:16, MKV sous-titré. Le post-traitement de chaque passage
    tourne en parallèle.
+
+---
+
+## Où commence et où finit un passage
+
+C'est la partie la plus délicate, et celle qui a demandé le plus de reprises.
+
+### Le début : le tour de parole du présentateur
+
+Le lancement d'un sujet, c'est le présentateur qui parle juste avant. On
+démarre donc au début de **sa** prise de parole. Trois précisions valent
+l'explication, parce que chacune vient d'un cas réel qui échouait :
+
+**Pourquoi pas le changement de plan le plus proche ?** Parce qu'un
+présentateur enchaîne titres, météo et sujet sans reprendre son souffle. Se
+caler sur un plan tombait en pleine météo.
+
+**Pourquoi pas une tournure repérée dans le texte ?** Chercher « reportage
+de », « sur place » ou « regardez » marche sur un journal et casse au premier
+présentateur qui formule autrement. C'est du vocabulaire de rédaction figé
+dans le code. Le tour de parole, lui, ne dépend d'aucune formulation ni même
+de la langue — le résultat est identique avec ou sans transcription.
+
+**Pourquoi le présentateur et pas le dernier qui a parlé ?** Parce que dans un
+reportage, l'interviewé aussi prend la parole. Un sujet qui s'ouvre sur une
+phrase d'interviewé faisait démarrer le passage en plein reportage. Le
+présentateur est reconnu à sa **récurrence** : il revient à l'ouverture, entre
+chaque sujet et à la clôture, là où un interviewé peut monopoliser trois
+minutes sans jamais reparaître. Le temps de parole ne sert qu'à départager.
+
+`--lookback` plafonne la longueur de l'annonce retenue. Le plafond porte sur
+l'annonce elle-même, pas sur la distance à sa première parole : entre les deux
+s'intercale souvent une interview, qui fait déjà partie du sujet.
+
+### La fin : la dernière image du reportage
+
+Le retour plateau est un **changement de plan, pas une prise de parole** : le
+présentateur réapparaît une bonne seconde avant d'ouvrir la bouche. Viser
+« juste avant qu'il parle » montrait le plateau à tous les coups. On vise donc
+le plan qui le ramène, et on s'arrête dessus.
+
+La détection de plans rate parfois une transition douce. Un plafond qui n'en
+dépend pas prend alors le relais : la coupe ne dépasse jamais le moment où le
+présentateur reprend la parole. Il ne corrige qu'une transition manquée —
+quand le plan détecté est correct, c'est lui qui décide.
+
+### Deux pièges de diarisation
+
+La diarisation attribue parfois à la personne des fragments d'une fraction de
+seconde, sur un générique ou un fond sonore. Regroupés avec sa vraie prise de
+parole, ils ramenaient le début du passage des dizaines de secondes trop tôt,
+sur le générique et sur un sujet qui n'était pas le sien. `--min-turn` (1,5 s)
+les écarte. Le même parasite en fin de passage, une fois le plateau revenu,
+faisait déborder la coupe : la borne de fin se cale sur la dernière parole
+réelle.
+
+### Les rediffusions
+
+Une matinale repasse le même reportage plusieurs fois dans la journée. La voix
+est là à chaque diffusion, et le sujet ressortait en trois exemplaires. Deux
+passages qui disent la même chose sont le même sujet : le commentaire est
+écrit une fois et ne change pas d'une rediffusion à l'autre.
+
+La comparaison mesure l'**inclusion** plutôt que la ressemblance — une
+rediffusion est parfois raccourcie, et une similarité symétrique la prendrait
+alors pour un autre sujet. C'est la version la plus complète qui est gardée.
+`--keep-reruns` pour tout sortir.
+
 
 ---
 
