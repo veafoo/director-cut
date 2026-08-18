@@ -153,6 +153,27 @@ if [ -z "$ICI" ] || [ ! -f "$ICI/pyproject.toml" ]; then
     CIBLE="$DOSSIER_PAR_DEFAUT"
     if [ -f "$CIBLE/pyproject.toml" ]; then
         ok "déjà présent dans $CIBLE"
+        # Relancer l'installation doit aussi mettre le projet à jour : sinon une
+        # correction poussée sur le dépôt n'arrive jamais jusqu'à la machine, et
+        # « relance l'installation » ne répare rien. Jamais bloquant : sans
+        # réseau, on continue avec la version en place.
+        if [ -d "$CIBLE/.git" ] && git --version >/dev/null 2>&1; then
+            if git -C "$CIBLE" pull --ff-only --quiet 2>/dev/null; then
+                ok "projet mis à jour (git pull)"
+            else
+                alerte "mise à jour impossible — on continue avec la version en place."
+            fi
+        else
+            # Installation par archive : on réextrait par-dessus. Les fichiers
+            # personnels (.hf_token, sample.mp4, sortie/, .venv) n'y sont pas,
+            # ils ne risquent rien.
+            if curl -fsSL "$DEPOT/archive/refs/heads/main.tar.gz" \
+                 | tar -xz -C "$CIBLE" --strip-components=1; then
+                ok "projet mis à jour (archive)"
+            else
+                alerte "mise à jour impossible — on continue avec la version en place."
+            fi
+        fi
     else
         info "Téléchargement dans $CIBLE"
         # Attention : sur un Mac neuf, /usr/bin/git EXISTE mais n'est qu'une
