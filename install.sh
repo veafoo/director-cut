@@ -19,6 +19,14 @@ set -euo pipefail
 DEPOT="https://github.com/veafoo/director-cut"
 DOSSIER_PAR_DEFAUT="$HOME/director-cut"
 
+# --token : refaire uniquement le token Hugging Face, sans toucher au reste.
+MODE_TOKEN=false
+case "${1:-}" in
+    --token|token) MODE_TOKEN=true ;;
+    "")            ;;
+    *)             printf 'Option inconnue : %s (seule option : --token)\n' "$1"; exit 1 ;;
+esac
+
 # ---------------------------------------------------------------- affichage --
 
 if [ -t 1 ] && command -v tput >/dev/null 2>&1 && [ "$(tput colors 2>/dev/null || echo 0)" -ge 8 ]; then
@@ -54,6 +62,81 @@ demander() {
     read -r reponse < "$CLAVIER" || reponse=""
     reponse="${reponse:-$defaut}"
     [[ "$reponse" =~ ^[oOyY] ]]
+}
+
+# --------------------------------------------------------------- token HF --
+# Les modèles de reconnaissance de voix sont sous conditions : compte Hugging
+# Face, trois pages à accepter, un token de lecture. C'est l'étape qui échoue le
+# plus souvent, donc on la vérifie vraiment au lieu de la supposer.
+
+MODELES_HF=(
+    "pyannote/speaker-diarization-3.1"
+    "pyannote/segmentation-3.0"
+    "pyannote/speaker-diarization-community-1"
+)
+
+verifier_token() {
+    local jeton="$1" code modele
+    code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $jeton" \
+           https://huggingface.co/api/whoami-v2 || echo 000)
+    if [ "$code" != "200" ]; then
+        RAISON="le token n'est pas reconnu par Hugging Face (code $code)."
+        return 1
+    fi
+    for modele in "${MODELES_HF[@]}"; do
+        code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $jeton" \
+               "https://huggingface.co/$modele/resolve/main/config.yaml" || echo 000)
+        if [ "$code" != "200" ]; then
+            RAISON="les conditions de $modele ne sont pas acceptées (code $code).
+       Ouvrir https://huggingface.co/$modele et cliquer « Agree and access »."
+            return 1
+        fi
+    done
+    return 0
+}
+
+etape_token() {
+    titre "Accès aux modèles de reconnaissance de voix"
+
+    TOKEN_OK=false
+    JETON=""
+    [ -f .hf_token ] && JETON=$(tr -d '[:space:]' < .hf_token)
+
+    if [ -n "$JETON" ] && verifier_token "$JETON"; then
+        ok "token déjà en place, et les 3 modèles sont accessibles"
+        TOKEN_OK=true
+    else
+        [ -n "$JETON" ] && alerte "Le token présent ne suffit pas : $RAISON"
+        cat <<'EXPLICATION'
+  À faire une seule fois, dans le navigateur :
+    1. Créer un compte sur huggingface.co et confirmer l'e-mail.
+    2. Sur ces 3 pages, cliquer « Agree and access » :
+         huggingface.co/pyannote/speaker-diarization-3.1
+         huggingface.co/pyannote/segmentation-3.0
+         huggingface.co/pyannote/speaker-diarization-community-1
+    3. Créer un token de type « Read » : huggingface.co/settings/tokens
+EXPLICATION
+        if [ -n "$CLAVIER" ] && command -v open >/dev/null 2>&1; then
+            if demander "Ouvrir ces pages dans le navigateur ?"; then
+                for modele in "${MODELES_HF[@]}"; do open "https://huggingface.co/$modele"; done
+                open "https://huggingface.co/settings/tokens"
+            fi
+        fi
+        while [ -n "$CLAVIER" ]; do
+            printf '\n  Coller le token ici (commence par hf_), ou Entrée pour le faire plus tard : '
+            read -r JETON < "$CLAVIER" || JETON=""
+            JETON=$(printf '%s' "$JETON" | tr -d '[:space:]')
+            [ -z "$JETON" ] && break
+            if verifier_token "$JETON"; then
+                printf '%s\n' "$JETON" > .hf_token
+                chmod 600 .hf_token
+                ok "token enregistré et vérifié sur les 3 modèles"
+                TOKEN_OK=true
+                break
+            fi
+            alerte "$RAISON"
+        done
+    fi
 }
 
 # ---------------------------------------------------- récupération du projet --
@@ -99,6 +182,17 @@ fi
 cd "$ICI"
 info "Dossier : $(pwd)"
 [ -n "$CLAVIER" ] || info "Mode non interactif : toute question sera considérée comme un non."
+
+# En mode --token, on s'arrête là : le token, rien d'autre.
+if [ "$MODE_TOKEN" = true ]; then
+    etape_token
+    if [ "$TOKEN_OK" = true ]; then
+        printf '\n%s%sToken en place.%s  (%s/.hf_token)\n\n' "$GRAS" "$VERT" "$RAZ" "$(pwd)"
+        exit 0
+    fi
+    printf '\n%s%sToujours pas de token.%s Relancer avec --token une fois créé.\n\n' "$GRAS" "$ROUGE" "$RAZ"
+    exit 1
+fi
 
 # ------------------------------------------------------------------ système --
 
@@ -261,78 +355,7 @@ case ":$PATH:" in
     *)          COMMANDE_PRETE=false ;;
 esac
 
-# --------------------------------------------------------------- token HF --
-# Les modèles de reconnaissance de voix sont sous conditions : compte Hugging
-# Face, trois pages à accepter, un token de lecture. C'est l'étape qui échoue le
-# plus souvent, donc on la vérifie vraiment au lieu de la supposer.
-
-MODELES_HF=(
-    "pyannote/speaker-diarization-3.1"
-    "pyannote/segmentation-3.0"
-    "pyannote/speaker-diarization-community-1"
-)
-
-verifier_token() {
-    local jeton="$1" code modele
-    code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $jeton" \
-           https://huggingface.co/api/whoami-v2 || echo 000)
-    if [ "$code" != "200" ]; then
-        RAISON="le token n'est pas reconnu par Hugging Face (code $code)."
-        return 1
-    fi
-    for modele in "${MODELES_HF[@]}"; do
-        code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $jeton" \
-               "https://huggingface.co/$modele/resolve/main/config.yaml" || echo 000)
-        if [ "$code" != "200" ]; then
-            RAISON="les conditions de $modele ne sont pas acceptées (code $code).
-       Ouvrir https://huggingface.co/$modele et cliquer « Agree and access »."
-            return 1
-        fi
-    done
-    return 0
-}
-
-titre "Accès aux modèles de reconnaissance de voix"
-
-TOKEN_OK=false
-JETON=""
-[ -f .hf_token ] && JETON=$(tr -d '[:space:]' < .hf_token)
-
-if [ -n "$JETON" ] && verifier_token "$JETON"; then
-    ok "token déjà en place, et les 3 modèles sont accessibles"
-    TOKEN_OK=true
-else
-    [ -n "$JETON" ] && alerte "Le token présent ne suffit pas : $RAISON"
-    cat <<'EXPLICATION'
-  À faire une seule fois, dans le navigateur :
-    1. Créer un compte sur huggingface.co et confirmer l'e-mail.
-    2. Sur ces 3 pages, cliquer « Agree and access » :
-         huggingface.co/pyannote/speaker-diarization-3.1
-         huggingface.co/pyannote/segmentation-3.0
-         huggingface.co/pyannote/speaker-diarization-community-1
-    3. Créer un token de type « Read » : huggingface.co/settings/tokens
-EXPLICATION
-    if [ -n "$CLAVIER" ] && command -v open >/dev/null 2>&1; then
-        if demander "Ouvrir ces pages dans le navigateur ?"; then
-            for modele in "${MODELES_HF[@]}"; do open "https://huggingface.co/$modele"; done
-            open "https://huggingface.co/settings/tokens"
-        fi
-    fi
-    while [ -n "$CLAVIER" ]; do
-        printf '\n  Coller le token ici (commence par hf_), ou Entrée pour le faire plus tard : '
-        read -r JETON < "$CLAVIER" || JETON=""
-        JETON=$(printf '%s' "$JETON" | tr -d '[:space:]')
-        [ -z "$JETON" ] && break
-        if verifier_token "$JETON"; then
-            printf '%s\n' "$JETON" > .hf_token
-            chmod 600 .hf_token
-            ok "token enregistré et vérifié sur les 3 modèles"
-            TOKEN_OK=true
-            break
-        fi
-        alerte "$RAISON"
-    done
-fi
+etape_token
 
 # ------------------------------------------------------------ voix de départ --
 
