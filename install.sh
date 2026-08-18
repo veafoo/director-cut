@@ -342,9 +342,24 @@ titre "La commande director-cut"
 
 BIN="$HOME/.local/bin"
 mkdir -p "$BIN"
+
+# torchcodec (tiré par pyannote) charge les bibliothèques de ffmpeg à l'exécution,
+# mais ses .dylib sont livrées sans LC_RPATH : le système ne va donc jamais
+# regarder dans /opt/homebrew/lib, et le run meurt sur « Could not load
+# libtorchcodec » au premier fichier audio. On dit au lanceur où chercher.
+# DYLD_* doit être posé avant le démarrage du processus : d'où le lanceur, et
+# pas un os.environ dans le code Python.
+LIB_FFMPEG=""
+if command -v brew >/dev/null 2>&1; then
+    LIB_FFMPEG="$(brew --prefix)/lib"
+elif command -v ffmpeg >/dev/null 2>&1; then
+    LIB_FFMPEG="$(cd "$(dirname "$(command -v ffmpeg)")/../lib" 2>/dev/null && pwd || echo "")"
+fi
+
 cat > "$BIN/director-cut" <<LANCEUR
 #!/usr/bin/env bash
 # Écrit par install.sh. Se replace dans le projet, où qu'on l'appelle.
+export DYLD_FALLBACK_LIBRARY_PATH="$LIB_FFMPEG:\${DYLD_FALLBACK_LIBRARY_PATH:-}"
 cd "$(pwd)" || exit 1
 exec "$(pwd)/.venv/bin/director-cut" "\$@"
 LANCEUR
@@ -427,6 +442,17 @@ titre "Vérification"
 .venv/bin/director-cut --help >/dev/null || stop "director-cut ne répond pas. Relance l'installation."
 ok "director-cut répond"
 ffmpeg -version >/dev/null 2>&1 && ok "ffmpeg répond"
+
+# Le vrai test : lire un fichier audio. C'est là que ça cassait, une fois
+# l'installation déclarée réussie et la personne lancée sur une vraie vidéo.
+if DYLD_FALLBACK_LIBRARY_PATH="$LIB_FFMPEG:${DYLD_FALLBACK_LIBRARY_PATH:-}" \
+   .venv/bin/python -c 'from torchcodec._internally_replaced_utils import load_core_libraries
+load_core_libraries()' >/dev/null 2>&1; then
+    ok "lecture des vidéos opérationnelle"
+else
+    alerte "torchcodec ne trouve pas les bibliothèques de ffmpeg."
+    info "Les vidéos ne pourront pas être lues. Signaler ce message."
+fi
 [ "$TOKEN_OK" = true ] && ok "accès aux modèles de voix vérifié"
 
 # ------------------------------------------------------------------- la fin --
