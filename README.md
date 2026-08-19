@@ -152,6 +152,27 @@ Les dossiers `srt/` et `mkv/` n'apparaissent qu'avec `--sous-titres`, et
 Les sous-titres de chaque passage sont recalés à zéro : ils sont directement
 utilisables sur le mp4 découpé, sans décalage à corriger.
 
+### Vitesse
+
+Sur une matinale de deux heures dont on ne garde que trois minutes, deux étapes
+coûtaient le prix de la source entière plutôt que celui du résultat.
+
+**Le repérage avant la diarisation.** Diariser, c'est calculer une empreinte
+pour chaque tour de parole de chaque personne présente — mesuré à 16,7 s par
+minute d'audio. L'outil repère donc d'abord sa voix au gros grain (1,48 s par
+minute, onze fois moins) et ne diarise que les zones trouvées, élargies pour
+contenir l'annonce et le retour plateau. Si le balayage ne trouve rien, ou s'il
+retient presque toute la source, la diarisation complète reprend la main :
+`--no-scan` la force.
+
+**La transcription seulement autour des passages.** Les sous-titres ne
+concernent que ses passages, et le repérage des rediffusions compare des textes
+de passages : transcrire les deux heures était inutile.
+
+Le reste, si le temps presse : `--fast` coupe par copie de flux au lieu de
+réencoder (bornes au plan près au lieu de l'image près), et `--keep-reruns`
+supprime toute transcription.
+
 ### Sous-titres : à la demande
 
 Chaque langue coûte une passe de transcription sur la totalité de l'audio —

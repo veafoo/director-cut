@@ -7,7 +7,8 @@ import click
 from rich.console import Console
 
 from . import (audio, brands, cut, diarize, download, embeddings, enroll,
-               identify, launch, lock, mux, scenes, screens, segments, ui)
+               identify, launch, lock, mux, scan, scenes, screens, segments,
+               ui)
 
 SAMPLE_EXTS = (".mp4", ".mkv", ".webm", ".mov", ".mp3", ".m4a", ".aac",
                ".flac", ".wav")
@@ -251,6 +252,9 @@ def cli():
 @click.option("--keep-reruns", is_flag=True,
               help="Garde les rediffusions. Par défaut, un sujet repassé\n"
                    "plusieurs fois dans la journée n'est sorti qu'une fois.")
+@click.option("--scan/--no-scan", "scan_on", default=True,
+              help="Repérer sa voix d'abord et ne diariser que ces zones "
+                   "(bien plus rapide). --no-scan diarise toute la source.")
 @click.option("--min-turn", default=1.5, type=float,
               help="Durée mini d'une prise de parole pour compter (écarte les parasites de diarisation).")
 @click.option("--lookback", default=40.0, type=float,
@@ -376,8 +380,50 @@ def _free_run_dir(out, mode, url, taken):
     return path
 
 
+def _diariser(console, wav, run_dir, ref, threshold, scan_on, hf_token,
+              num_speakers):
+    """Diarise, en évitant si possible de le faire sur toute la source.
+
+    Diariser une matinale entière coûte une demi-heure pour trois minutes de
+    reportage. On repère donc d'abord sa voix au gros grain — onze fois moins
+    cher — et on ne diarise que ces zones. Au moindre doute, on reprend la
+    source entière : un passage raté coûte plus cher qu'un run lent."""
+    def tout():
+        return diarize.diarize(wav, hf_token, num_speakers)
+
+    if not scan_on or not os.path.exists(ref):
+        return tout()
+    ref_vec, thr_ref = identify.load_reference(ref)
+    seuil = threshold if threshold is not None else thr_ref
+    if seuil is None:
+        return tout()
+
+    duree = scan.duree_audio(wav)
+    with ui.make_progress(console) as prog:
+        t = prog.add_task("repérage", total=100)
+        regions = scan.voice_regions(
+            wav, ref_vec, seuil,
+            on_progress=lambda c, tot: prog.update(
+                t, completed=min(100, 100 * c / tot)))
+    if not scan.vaut_le_coup(regions, duree):
+        raison = ("voix non repérée au balayage" if not regions
+                  else "elle est présente presque partout")
+        ui.info(console, f"diarisation complète ({raison})")
+        return tout()
+
+    part = scan.couverture(regions, duree)
+    ui.info(console, f"{len(regions)} zone(s) retenue(s), "
+                     f"{part * 100:.0f} % de la source à diariser")
+    return scan.diarize_regions(
+        wav, regions,
+        lambda morceau: diarize.diarize(morceau, hf_token, num_speakers,
+                                        show_progress=False),
+        run_dir)
+
+
 def _run(console, url, run_dir, *, mode, merge_gap, out, ref, names, threshold,
          num_speakers, pad, min_len, min_turn, keep_reruns, delete_source,
+         scan_on,
          lookback, launch_gap, precut, end_trim, fast, shots_n, brand, sharpen,
          strip_furniture, retouche, screens_on, no_mkv, sous_titres, langues,
          whisper_size, workers, hf_token):
@@ -427,7 +473,8 @@ def _run(console, url, run_dir, *, mode, merge_gap, out, ref, names, threshold,
     wav = audio.extract_wav(video, os.path.join(run_dir, "audio.wav"))
 
     ui.step(console, 3, 6, "Diarisation (qui parle quand)…")
-    diar = diarize.diarize(wav, hf_token, num_speakers)
+    diar = _diariser(console, wav, run_dir, ref, threshold, scan_on,
+                     hf_token, num_speakers)
 
     ui.step(console, 4, 6, "Identification de sa voix…")
     label, scores, her, thr = identify.find_her_segments(
