@@ -173,6 +173,25 @@ La part compte autant que la durée : c'est elle qui dit où chercher quand un
 run est trop long. Sur un lot, un second tableau récapitule le temps par vidéo,
 les échecs compris — parce que la question devient « laquelle a tout pris ».
 
+### Quand ce n'est pas elle
+
+Deux garde-fous, parce que la reconnaissance de voix se trompe parfois.
+
+**Chaque tour est revérifié.** La diarisation regroupe les voix qui se
+ressemblent, et ce regroupement n'est pas infaillible : sur un JT réel, une voix
+off de publicité s'est retrouvée dans le groupe de la journaliste. Le groupe
+passait le seuil en moyenne, mais ce fragment étranger prolongeait le passage
+au-delà du retour plateau. Chaque tour est donc comparé à **son** empreinte, pas
+seulement à celle du groupe. Les tours de moins d'une seconde sont conservés
+sans jugement : trop courts pour qu'une empreinte veuille dire quelque chose.
+
+**Le nom au lancement.** Le présentateur annonce en général « reportage de
+… ». Si `names.txt` existe, le run indique sur combien de passages le nom a été
+entendu. Ce n'est qu'une indication : le nom n'est pas toujours prononcé, donc
+rien n'est écarté pour autant. `--exiger-le-nom` rend le critère bloquant — et
+même là, si aucun passage ne porte son nom, ils sont tous gardés plutôt que de
+rendre un dossier vide.
+
 ### Vitesse
 
 Sur une matinale de deux heures dont on ne garde que trois minutes, deux étapes
