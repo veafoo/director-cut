@@ -97,3 +97,16 @@ def test_a_missing_token_is_still_refused(monkeypatch):
     monkeypatch.setattr(diarize, "_pipeline", None)
     with pytest.raises(RuntimeError, match="Hugging Face"):
         diarize.load_pipeline(None)
+
+
+def test_liberer_la_diarisation_vide_le_cache():
+    """Le pipeline doit vraiment être lâché : c'est tout l'intérêt."""
+    diarize._pipeline = object()
+    diarize.unload()
+    assert diarize._pipeline is None
+
+
+def test_liberer_sans_rien_de_charge_ne_fait_rien():
+    diarize._pipeline = None
+    diarize.unload()
+    assert diarize._pipeline is None

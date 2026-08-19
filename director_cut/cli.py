@@ -6,8 +6,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import click
 from rich.console import Console
 
-from . import (audio, brands, cut, diarize, download, enroll, identify, launch,
-               lock, mux, scenes, screens, segments, ui)
+from . import (audio, brands, cut, diarize, download, embeddings, enroll,
+               identify, launch, lock, mux, scenes, screens, segments, ui)
 
 SAMPLE_EXTS = (".mp4", ".mkv", ".webm", ".mov", ".mp3", ".m4a", ".aac",
                ".flac", ".wav")
@@ -398,6 +398,13 @@ def _run(console, url, run_dir, *, mode, merge_gap, out, ref, names, threshold,
         raise click.ClickException(
             "Voix non reconnue. Mets un meilleur sample.mp4 (où elle parle "
             "longtemps) et relance.")
+
+    # La diarisation et l'empreinte ont fini leur travail. Les garder en
+    # mémoire pendant que la transcription charge le sien fait tenir trois
+    # modèles à la fois : sur une machine juste en RAM, le système tue le
+    # processus, sans erreur ni trace, en pleine transcription.
+    diarize.unload()
+    embeddings.unload()
 
     # Transcription FR (origine) + EN (traduction), une fois pour tout l'audio
     fr_tx = en_tx = None

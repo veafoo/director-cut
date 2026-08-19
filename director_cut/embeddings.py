@@ -1,7 +1,34 @@
+import gc
+
 import numpy as np
 import torch
 
 _inference = None
+
+
+def free_memory():
+    """Rend au système la mémoire des modèles qu'on vient de lâcher.
+
+    Sans ça, Python garde les tenseurs jusqu'à un passage du ramasse-miettes
+    qui peut venir bien après — c'est-à-dire trop tard, quand le modèle suivant
+    est déjà en train de se charger à côté."""
+    gc.collect()
+    try:
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        elif torch.backends.mps.is_available():
+            torch.mps.empty_cache()
+    except Exception:                          # noqa: BLE001  (backend absent)
+        pass
+
+
+def unload():
+    """Libère le modèle d'empreinte vocale."""
+    global _inference
+    if _inference is None:
+        return
+    _inference = None
+    free_memory()
 
 
 def _device():
