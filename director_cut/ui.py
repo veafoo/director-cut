@@ -169,3 +169,46 @@ def detection_summary(console, mode, label, score, threshold, n_passages,
 
 def info(console, msg):
     console.print(f"   [dim]{msg}[/]")
+
+
+def timings(console, chrono, titre="Temps"):
+    """Le détail par étape, avec sa part du total.
+
+    La part compte autant que la durée : c'est elle qui dit où chercher quand
+    un run est trop long."""
+    from .chrono import hms
+
+    etapes = chrono.items()
+    total = chrono.total
+    tbl = Table(show_header=False, box=None, pad_edge=False)
+    tbl.add_column(style="bold")
+    tbl.add_column(justify="right")
+    tbl.add_column(justify="right", style="dim")
+    for nom, secondes in etapes:
+        part = f"{secondes / total * 100:.0f} %" if total else ""
+        tbl.add_row(nom, hms(secondes), part)
+    if etapes:
+        tbl.add_row("", "", "")
+    tbl.add_row("Total", hms(total), "")
+    console.print(Panel(tbl, title=f"[bold]{titre}[/]", border_style=ACCENT,
+                        expand=False))
+
+
+def timings_recap(console, lignes):
+    """Récapitulatif par vidéo : [(libellé, chrono|None, secondes), …].
+
+    Sur un lot, la question n'est plus « combien de temps » mais « laquelle a
+    tout pris »."""
+    from .chrono import hms
+
+    tbl = Table(show_header=True, box=None, pad_edge=False)
+    tbl.add_column("Vidéo", style="bold")
+    tbl.add_column("Temps", justify="right")
+    total = 0.0
+    for libelle, secondes in lignes:
+        tbl.add_row(libelle, hms(secondes))
+        total += secondes
+    tbl.add_row("", "")
+    tbl.add_row("Total", hms(total))
+    console.print(Panel(tbl, title="[bold]Temps par vidéo[/]",
+                        border_style=ACCENT, expand=False))

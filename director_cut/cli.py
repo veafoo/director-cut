@@ -1,12 +1,14 @@
 import datetime
 import os
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import click
 from rich.console import Console
 
-from . import (audio, brands, cut, diarize, download, embeddings, enroll,
+from . import (audio, brands, chrono as chrono_mod, cut, diarize, download,
+               embeddings, enroll,
                identify, launch, lock, mux, scan, scenes, screens, segments,
                ui)
 
@@ -310,7 +312,7 @@ def run_cmd(jobs):
 
     out = jobs[0]["out"]
     os.makedirs(out, exist_ok=True)
-    taken, done, failed = set(), [], []
+    taken, done, failed, temps = set(), [], [], []
     try:
         with lock.Lock(out):
             for i, job in enumerate(jobs, 1):
@@ -320,10 +322,14 @@ def run_cmd(jobs):
                     console.rule(f"[bold {ui.ACCENT}]{i}/{len(jobs)}[/] "
                                  f"{_label(url)} · {params['mode']}")
                 run_dir = _free_run_dir(params["out"], params["mode"], url, taken)
+                debut = time.monotonic()
                 try:
                     _run(console, url, run_dir, **params)
                     done.append(url)
+                    temps.append((_label(url), time.monotonic() - debut))
                 except Exception as e:                   # noqa: BLE001
+                    temps.append((f"{_label(url)} (échec)",
+                                  time.monotonic() - debut))
                     # Une vidéo qui échoue ne doit pas emporter les suivantes :
                     # sur une série, le travail déjà fait doit rester acquis.
                     failed.append((url, e))
@@ -337,6 +343,7 @@ def run_cmd(jobs):
 
     if len(jobs) > 1:
         console.print(f"\n[bold]{len(done)}/{len(jobs)} vidéo(s) traitée(s).[/]")
+        ui.timings_recap(console, temps)
     if failed and not done:
         raise click.ClickException("Aucune vidéo n'a pu être traitée.")
 
@@ -427,6 +434,7 @@ def _run(console, url, run_dir, *, mode, merge_gap, out, ref, names, threshold,
          lookback, launch_gap, precut, end_trim, fast, shots_n, brand, sharpen,
          strip_furniture, retouche, screens_on, no_mkv, sous_titres, langues,
          whisper_size, workers, hf_token):
+    chrono = chrono_mod.Chrono()
     workdir = os.getcwd()
     hf_token = _read_token(workdir, hf_token)
     if hf_token:
@@ -457,6 +465,7 @@ def _run(console, url, run_dir, *, mode, merge_gap, out, ref, names, threshold,
         if strip and template:
             template = brands.auto(brand, workdir, strip=True)
 
+    chrono.mark("Empreinte vocale")
     _ensure_reference(console, ref, workdir, hf_token)
 
     # Le dossier du run est fixé AVANT le téléchargement : la vidéo source et
@@ -466,16 +475,20 @@ def _run(console, url, run_dir, *, mode, merge_gap, out, ref, names, threshold,
     os.makedirs(run_dir, exist_ok=True)
 
     is_local = os.path.exists(url) and url.lower().endswith(download.VIDEO_EXTS)
+    chrono.mark("Téléchargement")
     ui.step(console, 1, 6, "Vidéo locale…" if is_local else "Téléchargement…")
     video = download.get_video(url, os.path.join(run_dir, "raw"))
 
+    chrono.mark("Extraction audio")
     ui.step(console, 2, 6, "Extraction audio…")
     wav = audio.extract_wav(video, os.path.join(run_dir, "audio.wav"))
 
+    chrono.mark("Diarisation")
     ui.step(console, 3, 6, "Diarisation (qui parle quand)…")
     diar = _diariser(console, wav, run_dir, ref, threshold, scan_on,
                      hf_token, num_speakers)
 
+    chrono.mark("Identification")
     ui.step(console, 4, 6, "Identification de sa voix…")
     label, scores, her, thr = identify.find_her_segments(
         wav, diar, ref, threshold)
@@ -504,6 +517,7 @@ def _run(console, url, run_dir, *, mode, merge_gap, out, ref, names, threshold,
                or (mode == "chronique" and names))
     need_en = "en" in srt_langs
 
+    chrono.mark("Détection des plans")
     with console.status(f"[{ui.ACCENT}]Détection des plans…[/]"):
         cuts = scenes.scene_cuts(video)
 
@@ -530,6 +544,7 @@ def _run(console, url, run_dir, *, mode, merge_gap, out, ref, names, threshold,
         from . import transcribe
         faites = " + ".join(l.upper() for l in ("fr", "en")
                             if (l == "fr" and need_fr) or (l == "en" and need_en))
+        chrono.mark("Transcription")
         ui.step(console, 5, 6, f"Transcription ({faites})…")
         if need_fr and "fr" not in srt_langs:
             ui.info(console, "transcription nécessaire au repérage des "
@@ -641,6 +656,7 @@ def _run(console, url, run_dir, *, mode, merge_gap, out, ref, names, threshold,
             f"La vidéo source a disparu pendant le run ({video}). "
             "Relance la commande : elle sera retéléchargée.")
 
+    chrono.mark("Découpe et sorties")
     ui.step(console, 6, 6,
             f"Découpe + {' + '.join(sorted(k for k in dirs if k != 'passages'))}"
             f" ({len(final)} passage(s), {max(1, workers)} en //)…")
@@ -677,6 +693,10 @@ def _run(console, url, run_dir, *, mode, merge_gap, out, ref, names, threshold,
     if not srt_langs:
         ui.info(console, "sous-titres non produits (--sous-titres pour les avoir, "
                          "--langues fr,en pour choisir)")
+
+    chrono.stop()
+    ui.timings(console, chrono)
+    return chrono
 
 
 @cli.command("enroll")
