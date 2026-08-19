@@ -456,32 +456,6 @@ def _run(console, url, run_dir, *, mode, merge_gap, out, ref, names, threshold,
     need_fr = ("fr" in srt_langs or (not keep_reruns)
                or (mode == "chronique" and names))
     need_en = "en" in srt_langs
-    if need_fr or need_en:
-        from . import transcribe
-        faites = " + ".join(l.upper() for l in ("fr", "en")
-                            if (l == "fr" and need_fr) or (l == "en" and need_en))
-        ui.step(console, 5, 6, f"Transcription ({faites})…")
-        if need_fr and "fr" not in srt_langs:
-            ui.info(console, "transcription nécessaire au repérage des "
-                             "rediffusions (--keep-reruns pour s'en passer)")
-        model = transcribe.load_model(whisper_size)
-        with ui.make_progress(console) as prog:
-            if need_fr:
-                t = prog.add_task("FR", total=100)
-                fr_tx = transcribe.transcribe_all(
-                    wav, model=model, task="transcribe", lang="fr",
-                    on_progress=lambda c, tot: prog.update(
-                        t, completed=min(100, 100 * c / tot)))
-                prog.update(t, completed=100)
-            if need_en:
-                t = prog.add_task("EN", total=100)
-                en_tx = transcribe.transcribe_all(
-                    wav, model=model, task="translate",
-                    on_progress=lambda c, tot: prog.update(
-                        t, completed=min(100, 100 * c / tot)))
-                prog.update(t, completed=100)
-    else:
-        ui.step(console, 5, 6, "Transcription… (ignorée)")
 
     with console.status(f"[{ui.ACCENT}]Détection des plans…[/]"):
         cuts = scenes.scene_cuts(video)
@@ -502,11 +476,50 @@ def _run(console, url, run_dir, *, mode, merge_gap, out, ref, names, threshold,
                              "écartés (parasites de diarisation)")
         her = solid
 
-    if mode == "jt":
-        merged = segments.merge_segments(her, gap)
-        final = segments.snap_to_scenes(segments.pad_segments(merged, pad), cuts)
+    # Les blocs bruts d'abord : ils disent OÙ transcrire.
+    blocks = segments.merge_segments(her, gap)
+
+    if need_fr or need_en:
+        from . import transcribe
+        faites = " + ".join(l.upper() for l in ("fr", "en")
+                            if (l == "fr" and need_fr) or (l == "en" and need_en))
+        ui.step(console, 5, 6, f"Transcription ({faites})…")
+        if need_fr and "fr" not in srt_langs:
+            ui.info(console, "transcription nécessaire au repérage des "
+                             "rediffusions (--keep-reruns pour s'en passer)")
+        # On ne transcrit que le voisinage des passages repérés : la marge
+        # couvre ce que les bornes vont chercher au-delà (l'annonce avant, le
+        # retour plateau après). Sur une source de deux heures dont on garde
+        # trois minutes, c'est l'écart entre une heure de calcul et une minute.
+        marge = max(lookback, 40.0) + 60.0
+        fenetres = transcribe.windows_around(blocks, marge)
+        couvert = sum(e - s for s, e in fenetres)
+        ui.info(console, f"transcription sur {couvert / 60:.0f} min "
+                         f"({len(fenetres)} zone(s)) au lieu de toute la source")
+        model = transcribe.load_model(whisper_size)
+        with ui.make_progress(console) as prog:
+            if need_fr:
+                t = prog.add_task("FR", total=100)
+                fr_tx = transcribe.transcribe_windows(
+                    wav, fenetres, model=model, task="transcribe", lang="fr",
+                    workdir=run_dir,
+                    on_progress=lambda c, tot: prog.update(
+                        t, completed=min(100, 100 * c / tot)))
+                prog.update(t, completed=100)
+            if need_en:
+                t = prog.add_task("EN", total=100)
+                en_tx = transcribe.transcribe_windows(
+                    wav, fenetres, model=model, task="translate",
+                    workdir=run_dir,
+                    on_progress=lambda c, tot: prog.update(
+                        t, completed=min(100, 100 * c / tot)))
+                prog.update(t, completed=100)
     else:
-        blocks = segments.merge_segments(her, gap)
+        ui.step(console, 5, 6, "Transcription… (ignorée)")
+
+    if mode == "jt":
+        final = segments.snap_to_scenes(segments.pad_segments(blocks, pad), cuts)
+    else:
         all_turns = launch.turns(diar)
         final, validated_any = [], False
         for bs, be in blocks:
