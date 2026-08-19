@@ -8,7 +8,7 @@ import click
 from rich.console import Console
 
 from . import (audio, brands, chrono as chrono_mod, cut, diarize, download,
-               embeddings, enroll,
+               embeddings, enroll, son as son_mod,
                identify, launch, lock, mux, scan, scenes, screens, segments,
                ui)
 
@@ -254,6 +254,9 @@ def cli():
 @click.option("--keep-reruns", is_flag=True,
               help="Garde les rediffusions. Par défaut, un sujet repassé\n"
                    "plusieurs fois dans la journée n'est sorti qu'une fois.")
+@click.option("--son/--sans-son", "son_on", default=True,
+              help="Signature sonore au lancement. Déposer un fichier "
+                   "jingle.mp3 à la racine pour la remplacer.")
 @click.option("--exiger-le-nom", is_flag=True,
               help="Ne garder que les passages dont le lancement prononce "
                    "son nom (voir names.txt). Le nom n'est pas toujours dit.")
@@ -311,6 +314,9 @@ def run_cmd(jobs):
             director-cut run --mode reportage "URL1" --mode jt "URL2"
     """
     console = Console()
+    # Avant le bandeau : le son et l'affichage partent ensemble.
+    son_mod.jouer(os.getcwd(), actif=jobs[0].get("son_on", True),
+                  interactif=console.is_terminal)
     ui.splash(console, jobs)
 
     out = jobs[0]["out"]
@@ -321,6 +327,7 @@ def run_cmd(jobs):
             for i, job in enumerate(jobs, 1):
                 params = dict(job)
                 url = params.pop("urls")[0]
+                params.pop("son_on", None)      # réglage de la commande, pas du run
                 if len(jobs) > 1:
                     console.rule(f"[bold {ui.ACCENT}]{i}/{len(jobs)}[/] "
                                  f"{_label(url)} · {params['mode']}")

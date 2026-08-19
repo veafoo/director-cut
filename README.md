@@ -173,6 +173,19 @@ La part compte autant que la durée : c'est elle qui dit où chercher quand un
 run est trop long. Sur un lot, un second tableau récapitule le temps par vidéo,
 les échecs compris — parce que la question devient « laquelle a tout pris ».
 
+### Le son du lancement
+
+Une courte signature sonore accompagne le bandeau d'ouverture. Elle est
+**fabriquée** par ffmpeg au premier lancement puis mise en cache : le dépôt
+étant public, on n'y dépose aucune musique.
+
+Pour la remplacer, déposer un fichier nommé `jingle.*` (mp3, wav, m4a…) à la
+racine du projet — il est ignoré par git, comme le sample et le token.
+`--sans-son` coupe le tout.
+
+Le son ne se déclenche pas si la sortie n'est pas un terminal, et un lecteur
+absent ou un fichier illisible n'empêche jamais un run de démarrer.
+
 ### Quand ce n'est pas elle
 
 Deux garde-fous, parce que la reconnaissance de voix se trompe parfois.
