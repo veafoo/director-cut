@@ -7,6 +7,7 @@ voix_ref.npz
 *.npy
 sample*
 samples/
+jingle*
 
 # Logos de chaînes : marques déposées, elles restent en local
 brands/

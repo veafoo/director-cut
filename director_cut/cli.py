@@ -8,7 +8,7 @@ import click
 from rich.console import Console
 
 from . import (audio, brands, chrono as chrono_mod, cut, diarize, download,
-               embeddings, enroll,
+               embeddings, enroll, son as son_mod,
                identify, launch, lock, mux, scan, scenes, screens, segments,
                ui)
 
@@ -254,6 +254,12 @@ def cli():
 @click.option("--keep-reruns", is_flag=True,
               help="Garde les rediffusions. Par défaut, un sujet repassé\n"
                    "plusieurs fois dans la journée n'est sorti qu'une fois.")
+@click.option("--son/--sans-son", "son_on", default=True,
+              help="Signature sonore au lancement. Déposer un fichier "
+                   "jingle.mp3 à la racine pour la remplacer.")
+@click.option("--exiger-le-nom", is_flag=True,
+              help="Ne garder que les passages dont le lancement prononce "
+                   "son nom (voir names.txt). Le nom n'est pas toujours dit.")
 @click.option("--scan/--no-scan", "scan_on", default=True,
               help="Repérer sa voix d'abord et ne diariser que ces zones "
                    "(bien plus rapide). --no-scan diarise toute la source.")
@@ -308,6 +314,9 @@ def run_cmd(jobs):
             director-cut run --mode reportage "URL1" --mode jt "URL2"
     """
     console = Console()
+    # Avant le bandeau : le son et l'affichage partent ensemble.
+    son_mod.jouer(os.getcwd(), actif=jobs[0].get("son_on", True),
+                  interactif=console.is_terminal)
     ui.splash(console, jobs)
 
     out = jobs[0]["out"]
@@ -318,6 +327,7 @@ def run_cmd(jobs):
             for i, job in enumerate(jobs, 1):
                 params = dict(job)
                 url = params.pop("urls")[0]
+                params.pop("son_on", None)      # réglage de la commande, pas du run
                 if len(jobs) > 1:
                     console.rule(f"[bold {ui.ACCENT}]{i}/{len(jobs)}[/] "
                                  f"{_label(url)} · {params['mode']}")
@@ -430,7 +440,7 @@ def _diariser(console, wav, run_dir, ref, threshold, scan_on, hf_token,
 
 def _run(console, url, run_dir, *, mode, merge_gap, out, ref, names, threshold,
          num_speakers, pad, min_len, min_turn, keep_reruns, delete_source,
-         scan_on,
+         scan_on, exiger_le_nom,
          lookback, launch_gap, precut, end_trim, fast, shots_n, brand, sharpen,
          strip_furniture, retouche, screens_on, no_mkv, sous_titres, langues,
          whisper_size, workers, hf_token):
@@ -492,6 +502,14 @@ def _run(console, url, run_dir, *, mode, merge_gap, out, ref, names, threshold,
     ui.step(console, 4, 6, "Identification de sa voix…")
     label, scores, her, thr = identify.find_her_segments(
         wav, diar, ref, threshold)
+    if label:
+        # Le groupe de voix passe le seuil en moyenne ; ça ne dit rien de
+        # chacun de ses tours. Un intrus au mauvais endroit (voix off de pub,
+        # autre journaliste) déplace la fin du passage et fausse tout ensuite.
+        her, ecartes = identify.verify_turns(wav, her, ref, thr)
+        if ecartes:
+            ui.info(console, f"{len(ecartes)} tour(s) écarté(s) : dans son "
+                             f"groupe de voix, mais pas assez ressemblants")
     if not label:
         ui.info(console, "scores: " +
                 ", ".join(f"{k}={v:.2f}" for k, v in sorted(scores.items())))
@@ -583,17 +601,31 @@ def _run(console, url, run_dir, *, mode, merge_gap, out, ref, names, threshold,
         final = segments.snap_to_scenes(segments.pad_segments(blocks, pad), cuts)
     else:
         all_turns = launch.turns(diar)
-        final, validated_any = [], False
+        final, validated_any, valides = [], False, []
         for bs, be in blocks:
             s, e, validated = launch.build_span(
                 mode, all_turns, label, bs, be, cuts=cuts,
                 transcript=fr_tx, names=names, max_lookback=lookback,
                 launch_gap=launch_gap, precut_window=precut, end_trim=end_trim)
             validated_any = validated_any or bool(validated)
+            valides.append(bool(validated))
             final.append((s, e))
         if names:
-            name_status = ("nom détecté au lancement ✓" if validated_any
-                           else "nom non vu (lancement pris quand même)")
+            vus = sum(1 for v in valides if v)
+            name_status = (f"nom entendu sur {vus}/{len(valides)} passage(s)"
+                           if vus else "nom jamais entendu au lancement")
+            if exiger_le_nom:
+                gardes = [sp for sp, v in zip(final, valides) if v]
+                if gardes:
+                    ecartes = len(final) - len(gardes)
+                    if ecartes:
+                        ui.info(console, f"{ecartes} passage(s) écarté(s) : son "
+                                         f"nom n'a pas été entendu au lancement")
+                    final = gardes
+                else:
+                    ui.info(console, "aucun passage ne porte son nom au "
+                                     "lancement — ils sont tous gardés "
+                                     "(--exiger-le-nom ne peut pas tout jeter)")
 
     final = segments.drop_short(final, min_len)
     if not keep_reruns and fr_tx:
