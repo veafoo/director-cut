@@ -152,6 +152,27 @@ Les dossiers `srt/` et `mkv/` n'apparaissent qu'avec `--sous-titres`, et
 Les sous-titres de chaque passage sont recalés à zéro : ils sont directement
 utilisables sur le mp4 découpé, sans décalage à corriger.
 
+### Combien de temps ça a pris
+
+Chaque run se termine par le détail du temps passé, étape par étape, avec la
+part de chacune :
+
+```
+╭─────────────── Temps ───────────────╮
+│ Empreinte vocale     00:00:41   6 % │
+│ Téléchargement       00:02:08  19 % │
+│ Diarisation          00:02:43  24 % │
+│ Transcription        00:01:01   9 % │
+│ Découpe et sorties   00:03:10  27 % │
+│                                     │
+│ Total                00:11:31       │
+╰─────────────────────────────────────╯
+```
+
+La part compte autant que la durée : c'est elle qui dit où chercher quand un
+run est trop long. Sur un lot, un second tableau récapitule le temps par vidéo,
+les échecs compris — parce que la question devient « laquelle a tout pris ».
+
 ### Vitesse
 
 Sur une matinale de deux heures dont on ne garde que trois minutes, deux étapes
