@@ -70,6 +70,42 @@ class PerVideo(click.Command):
         return []
 
 
+LANGUES_SRT = {"fr": "fre", "en": "eng"}
+
+
+def _langues_srt(sous_titres, langues):
+    """Les langues de sous-titres demandées, dans l'ordre, sans doublon.
+
+    Aucune par défaut : chaque langue coûte une passe de transcription sur tout
+    l'audio. `--sous-titres` seul donne le français, la langue d'origine."""
+    if not langues:
+        return ["fr"] if sous_titres else []
+    demandees = [l.strip().lower()
+                 for l in langues.replace(" ", ",").split(",") if l.strip()]
+    inconnues = [l for l in demandees if l not in LANGUES_SRT]
+    if inconnues:
+        raise click.BadParameter(
+            f"langue(s) indisponible(s) : {', '.join(inconnues)}. Le modèle sait "
+            f"transcrire la langue d'origine (fr) et traduire vers l'anglais "
+            f"(en), rien d'autre.")
+    retenues = []
+    for l in demandees:
+        if l not in retenues:
+            retenues.append(l)
+    return retenues
+
+
+def _valider_langues(ctx, param, value):
+    """Refuser une langue impossible dès la ligne de commande.
+
+    Sans ça, la faute de frappe ne se voit qu'au moment d'écrire les
+    sous-titres — c'est-à-dire après le téléchargement de la vidéo et une
+    heure de calcul."""
+    if value:
+        _langues_srt(False, value)
+    return value
+
+
 def _read_token(workdir, opt):
     if opt:
         return opt
@@ -247,7 +283,11 @@ def cli():
                    "recadrage d'un 16:9 en 9:16 ne garde qu'un tiers de la "
                    "largeur, et la retouche IA charge lourdement la machine.")
 @click.option("--no-mkv", is_flag=True, help="Pas de MKV sous-titré.")
-@click.option("--no-transcript", is_flag=True, help="Pas de sous-titres (ni FR ni EN).")
+@click.option("--sous-titres/--sans-sous-titres", "sous_titres", default=False,
+              help="Sous-titres par passage (français par défaut) et pistes du MKV.")
+@click.option("--langues", default=None, callback=_valider_langues,
+              help="Langues des sous-titres, séparées par une virgule : "
+                   "--langues fr,en. Implique --sous-titres.")
 @click.option("--whisper-size", default="small")
 @click.option("--workers", default=3, type=int, help="Tâches en parallèle.")
 @click.option("--hf-token", default=None, help="Défaut: .hf_token ou HF_TOKEN.")
@@ -339,7 +379,7 @@ def _free_run_dir(out, mode, url, taken):
 def _run(console, url, run_dir, *, mode, merge_gap, out, ref, names, threshold,
          num_speakers, pad, min_len, min_turn, keep_reruns, delete_source,
          lookback, launch_gap, precut, end_trim, fast, shots_n, brand, sharpen,
-         strip_furniture, retouche, screens_on, no_mkv, no_transcript,
+         strip_furniture, retouche, screens_on, no_mkv, sous_titres, langues,
          whisper_size, workers, hf_token):
     workdir = os.getcwd()
     hf_token = _read_token(workdir, hf_token)
@@ -407,12 +447,23 @@ def _run(console, url, run_dir, *, mode, merge_gap, out, ref, names, threshold,
     embeddings.unload()
 
     # Transcription FR (origine) + EN (traduction), une fois pour tout l'audio
+    srt_langs = _langues_srt(sous_titres, langues)
     fr_tx = en_tx = None
-    need_fr = (not no_transcript) or (mode == "chronique" and names)
-    need_en = not no_transcript
+    # Le transcript français ne sert pas qu'aux sous-titres : la découpe s'en
+    # sert pour reconnaître une rediffusion (le commentaire est écrit une fois
+    # et ne change pas d'une diffusion à l'autre) et, en chronique, pour
+    # confirmer le lancement au nom. On le calcule donc même sans sous-titres.
+    need_fr = ("fr" in srt_langs or (not keep_reruns)
+               or (mode == "chronique" and names))
+    need_en = "en" in srt_langs
     if need_fr or need_en:
         from . import transcribe
-        ui.step(console, 5, 6, "Transcription (FR + EN)…")
+        faites = " + ".join(l.upper() for l in ("fr", "en")
+                            if (l == "fr" and need_fr) or (l == "en" and need_en))
+        ui.step(console, 5, 6, f"Transcription ({faites})…")
+        if need_fr and "fr" not in srt_langs:
+            ui.info(console, "transcription nécessaire au repérage des "
+                             "rediffusions (--keep-reruns pour s'en passer)")
         model = transcribe.load_model(whisper_size)
         with ui.make_progress(console) as prog:
             if need_fr:
@@ -488,11 +539,11 @@ def _run(console, url, run_dir, *, mode, merge_gap, out, ref, names, threshold,
     # Un dossier par type de sortie, et uniquement pour ce qu'on produit :
     # un dossier vide laisse croire que la sortie a échoué.
     kinds = ["passages", "audio"]
-    if not no_transcript:
+    if srt_langs:
         kinds.append("srt")
     if screens_on:
         kinds.append("screens")
-    if not no_mkv and not no_transcript:
+    if not no_mkv and srt_langs:
         kinds.append("mkv")
     dirs = {k: os.path.join(run_dir, k) for k in kinds}
     for d in dirs.values():
@@ -508,11 +559,11 @@ def _run(console, url, run_dir, *, mode, merge_gap, out, ref, names, threshold,
         made["audio"] = audio.extract_clip_audio(
             video, s, e, os.path.join(dirs["audio"], base + ".m4a"))
         subs = []
-        if fr_tx is not None:
+        if "fr" in srt_langs and fr_tx is not None:
             from . import transcribe
             subs.append((transcribe.clip_srt(
                 fr_tx, s, e, os.path.join(dirs["srt"], base + ".fr.srt")), "fre"))
-        if en_tx is not None:
+        if "en" in srt_langs and en_tx is not None:
             from . import transcribe
             subs.append((transcribe.clip_srt(
                 en_tx, s, e, os.path.join(dirs["srt"], base + ".en.srt")), "eng"))
@@ -563,6 +614,9 @@ def _run(console, url, run_dir, *, mode, merge_gap, out, ref, names, threshold,
     console.print("  " + "  ".join(f"{k}/" for k in sorted(dirs)))
     if not screens_on:
         ui.info(console, "vignettes 9:16 non produites (--screens pour les avoir)")
+    if not srt_langs:
+        ui.info(console, "sous-titres non produits (--sous-titres pour les avoir, "
+                         "--langues fr,en pour choisir)")
 
 
 @cli.command("enroll")

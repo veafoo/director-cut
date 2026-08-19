@@ -4,10 +4,10 @@ Récupère une vidéo (replay d'un JT, d'une matinale, d'une émission…) et d�
 **par la voix** les passages d'une personne — chronique, reportage, ou JT
 complet. Aucune reconnaissance faciale.
 
-Pour chaque passage, l'outil produit : la vidéo découpée, l'audio, des
-sous-titres FR **et** EN, des screenshots recadrés en 9:16 (vignettes réseaux
-sociaux), et un MKV avec les sous-titres embarqués — le tout rangé dans un
-dossier propre au run.
+Pour chaque passage, l'outil produit : la vidéo découpée et l'audio. Sur
+demande : des sous-titres (français par défaut, anglais possible), des
+screenshots recadrés en 9:16 (vignettes réseaux sociaux), et un MKV avec les
+sous-titres embarqués — le tout rangé dans un dossier propre au run.
 
 ---
 
@@ -136,7 +136,7 @@ Plusieurs passages dans une même vidéo → chacun découpé et rangé à part.
 sortie/extract_reportage_2026-08-12/
 ├── passages/   passage_01.mp4, passage_02.mp4 …      (vidéos découpées)
 ├── audio/      passage_01.m4a …                      (audio par passage)
-├── srt/        passage_01.fr.srt, passage_01.en.srt … (sous-titres FR + EN)
+├── srt/        passage_01.fr.srt … (sous-titres, avec --sous-titres)
 ├── screens/    passage_01_01.jpg … (9:16)            (vignettes réseaux sociaux)
 └── mkv/        passage_01.mkv …                      (vidéo + sous-titres embarqués)
 ```
@@ -145,8 +145,32 @@ Un dossier distinct est créé par run et par type (`extract_reportage_…`,
 `extract_chronique_…`, `extract_jt_…`). La date est déduite de l'URL/fichier, à
 défaut c'est celle du jour.
 
+Les dossiers `srt/` et `mkv/` n'apparaissent qu'avec `--sous-titres`, et
+`screens/` qu'avec `--screens` : un dossier vide laisse croire que la sortie a
+échoué.
+
 Les sous-titres de chaque passage sont recalés à zéro : ils sont directement
 utilisables sur le mp4 découpé, sans décalage à corriger.
+
+### Sous-titres : à la demande
+
+Chaque langue coûte une passe de transcription sur la totalité de l'audio —
+c'est l'étape la plus lourde du run. Ils ne sortent donc que si on les demande.
+
+```bash
+director-cut run "URL" --mode reportage --sous-titres          # français
+director-cut run "URL" --mode reportage --langues fr,en        # français + anglais
+```
+
+Seuls le **français** (la langue d'origine) et l'**anglais** sont disponibles :
+le modèle sait transcrire ce qu'il entend et traduire vers l'anglais, rien
+d'autre. Toute autre langue est refusée dès la ligne de commande, avant le
+téléchargement.
+
+À noter : même sans sous-titres, la transcription française tourne, car la
+découpe s'en sert pour reconnaître une **rediffusion** (le commentaire est écrit
+une fois et ne change pas d'une diffusion à l'autre). `--keep-reruns` s'en
+passe, et rend alors le run nettement plus court.
 
 ---
 
@@ -356,7 +380,9 @@ final (0 pour couper).
 | `--sans-retouche` | Coupe la retouche IA des vignettes. |
 | `--strip-furniture` / `--no-strip-furniture` | Force le rognage des bandes d'habillage (défaut : actif avec la retouche). |
 | `--screens` | Produit les vignettes 9:16 (désactivées par défaut, voir plus bas). |
-| `--no-mkv` / `--no-transcript` | Désactive une sortie. |
+| `--sous-titres` | Sous-titres par passage, en français. |
+| `--langues fr,en` | Choisit les langues (implique `--sous-titres`). |
+| `--no-mkv` | Pas de MKV, même quand les sous-titres sont demandés. |
 | `--workers N` | Tâches en parallèle (défaut 3). |
 | `--name X` | Variante de nom en plus de `names.txt` (répétable). |
 | `--whisper-size` | `tiny`…`large-v3` pour la transcription. |
