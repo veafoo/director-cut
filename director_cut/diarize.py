@@ -24,6 +24,22 @@ def _to_turns(output):
 _pipeline = None
 
 
+def unload():
+    """Libère le pipeline de diarisation.
+
+    Il a fini son travail dès que la diarisation est faite. Le garder en
+    mémoire pendant que la transcription charge le sien fait culminer la RAM au
+    pire moment : sur une machine juste, le système tue le processus sans un
+    mot d'explication. Sur un lot, il sera rechargé pour la vidéo suivante —
+    quelques secondes, contre un run qui n'arrive pas au bout."""
+    global _pipeline
+    if _pipeline is None:
+        return
+    _pipeline = None
+    from .embeddings import free_memory
+    free_memory()
+
+
 def load_pipeline(hf_token):
     """Charge le pipeline de diarisation, une fois pour toutes.
 
