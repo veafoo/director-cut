@@ -1,6 +1,7 @@
 import datetime
 import os
 
+import click
 import pytest
 from click.testing import CliRunner
 
@@ -180,17 +181,20 @@ def test_thumbnails_are_off_by_default():
 def test_only_the_produced_folders_are_created(tmp_path):
     """Un dossier vide laisse croire que la sortie a échoué."""
     kinds = ["passages", "audio"]
-    for no_transcript, screens_on, no_mkv, attendu in (
-            (False, False, False, {"passages", "audio", "srt", "mkv"}),
-            (False, True, False, {"passages", "audio", "srt", "screens", "mkv"}),
-            (True, False, True, {"passages", "audio"}),
-            (True, True, True, {"passages", "audio", "screens"})):
+    for srt_langs, screens_on, no_mkv, attendu in (
+            (["fr"], False, False, {"passages", "audio", "srt", "mkv"}),
+            (["fr", "en"], True, False,
+             {"passages", "audio", "srt", "screens", "mkv"}),
+            ([], False, True, {"passages", "audio"}),
+            ([], True, True, {"passages", "audio", "screens"}),
+            # Sous-titres demandés mais MKV refusé : le srt sort quand même.
+            (["fr"], False, True, {"passages", "audio", "srt"})):
         k = list(kinds)
-        if not no_transcript:
+        if srt_langs:
             k.append("srt")
         if screens_on:
             k.append("screens")
-        if not no_mkv and not no_transcript:
+        if not no_mkv and srt_langs:
             k.append("mkv")
         assert set(k) == attendu
 
@@ -276,3 +280,53 @@ def test_forgetting_a_folder_that_was_never_created():
 def test_the_label_stays_short_and_readable():
     assert cli._label("https://x.fr/replay/jt-du-12-aout.html") == "jt-du-12-aout.html"
     assert len(cli._label("https://x.fr/" + "a" * 200)) <= 71
+
+
+# --- sous-titres : une option, et le choix des langues --------------------
+
+
+def test_subtitles_are_off_by_default():
+    """Chaque langue coûte une passe de transcription sur tout l'audio."""
+    param = next(p for p in cli.run_cmd.params if p.name == "sous_titres")
+    assert param.default is False
+    assert cli._langues_srt(False, None) == []
+
+
+def test_asking_for_subtitles_gives_french():
+    assert cli._langues_srt(True, None) == ["fr"]
+
+
+@pytest.mark.parametrize("demande,attendu", [
+    ("fr", ["fr"]),
+    ("en", ["en"]),
+    ("fr,en", ["fr", "en"]),
+    ("en,fr", ["en", "fr"]),          # l'ordre demandé est conservé
+    ("FR, EN", ["fr", "en"]),         # casse et espaces tolérées
+    ("fr fr en", ["fr", "en"]),       # doublons écartés
+])
+def test_languages_can_be_chosen(demande, attendu):
+    assert cli._langues_srt(False, demande) == attendu
+
+
+def test_choosing_languages_implies_subtitles():
+    # Pas besoin de penser à --sous-titres si on a nommé les langues.
+    assert cli._langues_srt(False, "en") == ["en"]
+
+
+def test_an_impossible_language_is_refused_with_the_reason():
+    with pytest.raises(click.BadParameter) as e:
+        cli._langues_srt(False, "es")
+    assert "es" in str(e.value)
+    # Le message doit dire pourquoi, pas seulement que c'est refusé.
+    assert "anglais" in str(e.value)
+
+
+def test_an_impossible_language_is_refused_before_any_work():
+    """La faute de frappe doit se voir avant le téléchargement, pas après."""
+    result = CliRunner().invoke(cli.cli, ["run", "--langues", "es", "x.mp4"])
+    assert result.exit_code != 0
+    assert "indisponible" in result.output
+    # Le message doit venir du contrôle de la ligne de commande…
+    assert "--langues" in result.output
+    # …et pas d'une étape de traitement.
+    assert "empreinte" not in result.output
