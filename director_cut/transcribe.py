@@ -53,3 +53,51 @@ def clip_srt(transcript, clip_start, clip_end, out_srt):
     with open(out_srt, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
     return out_srt
+
+
+def windows_around(spans, margin, duration=None):
+    """Fenêtres à transcrire autour de passages repérés, fusionnées.
+
+    La marge couvre ce que la découpe va chercher au-delà des bornes brutes
+    (l'annonce du présentateur avant, le retour plateau après) : sans elle, le
+    texte manquerait exactement là où les bornes se décident."""
+    if not spans:
+        return []
+    larges = [(max(0.0, s - margin),
+               min(e + margin, duration) if duration else e + margin)
+              for s, e in spans]
+    from .segments import merge_segments
+    return merge_segments(larges, 0.0)
+
+
+def transcribe_windows(wav_path, windows, model=None, model_size="small",
+                       lang="fr", task="transcribe", on_progress=None,
+                       workdir=None):
+    """Comme transcribe_all, mais sur des fenêtres seulement.
+
+    Les temps rendus sont ceux de la source, pas ceux de la fenêtre : le reste
+    de la chaîne n'a pas à savoir qu'on a découpé."""
+    import os
+    import tempfile
+
+    from . import audio
+
+    m = model or load_model(model_size)
+    total = sum(e - s for s, e in windows) or 1.0
+    faits = 0.0
+    out = []
+    tmp = tempfile.mkdtemp(prefix="dc_tx_", dir=workdir)
+    try:
+        for i, (deb, fin) in enumerate(windows):
+            morceau = audio.extract_wav_span(
+                wav_path, deb, fin, os.path.join(tmp, f"w{i:03d}.wav"))
+            segs = transcribe_all(morceau, model=m, lang=lang, task=task)
+            out.extend((deb + s, deb + e, t) for s, e, t in segs)
+            faits += fin - deb
+            if on_progress:
+                on_progress(min(faits, total), total)
+            os.remove(morceau)
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+    return sorted(out)

@@ -124,3 +124,64 @@ def test_the_whisper_model_is_loaded_once_per_size(monkeypatch):
         transcribe.load_model("small")
     transcribe.load_model("large-v3")
     assert charges == ["small", "large-v3"]
+
+
+# --- ne transcrire que le voisinage des passages --------------------------
+
+
+def test_windows_cover_what_the_borders_will_look_for():
+    # La marge doit précéder le passage : c'est là que se trouve l'annonce.
+    assert transcribe.windows_around([(100.0, 160.0)], 90.0) == [(10.0, 250.0)]
+
+
+def test_windows_never_start_before_the_beginning():
+    assert transcribe.windows_around([(10.0, 20.0)], 90.0) == [(0.0, 110.0)]
+
+
+def test_overlapping_windows_are_merged():
+    """Deux passages proches ne doivent pas faire transcrire deux fois."""
+    assert transcribe.windows_around([(100.0, 160.0), (200.0, 240.0)], 90.0) \
+        == [(10.0, 330.0)]
+
+
+def test_distant_passages_keep_their_own_window():
+    fenetres = transcribe.windows_around([(100.0, 160.0), (900.0, 940.0)], 90.0)
+    assert len(fenetres) == 2
+
+
+def test_no_passage_no_transcription():
+    assert transcribe.windows_around([], 90.0) == []
+
+
+def test_window_times_are_put_back_on_the_source_timeline(monkeypatch):
+    """Le modèle rend des temps relatifs à la fenêtre qu'on lui a donnée.
+
+    Sans recalage, tous les sous-titres seraient décalés du début de la fenêtre
+    — et les bornes calculées sur le mauvais texte."""
+    from director_cut import audio
+
+    def faux_decoupage(wav, debut, fin, out, **kw):
+        open(out, "w").close()
+        return out
+
+    monkeypatch.setattr(audio, "extract_wav_span", faux_decoupage)
+    monkeypatch.setattr(transcribe, "transcribe_all",
+                        lambda path, **kw: [(0.0, 2.0, "un"), (2.0, 4.0, "deux")])
+
+    out = transcribe.transcribe_windows(
+        "source.wav", [(100.0, 110.0), (300.0, 310.0)], model=object())
+    assert out == [(100.0, 102.0, "un"), (102.0, 104.0, "deux"),
+                   (300.0, 302.0, "un"), (302.0, 304.0, "deux")]
+
+
+def test_progress_is_reported_on_the_audio_actually_done(monkeypatch):
+    from director_cut import audio
+
+    monkeypatch.setattr(audio, "extract_wav_span",
+                        lambda w, d, f, out, **kw: (open(out, "w").close(), out)[1])
+    monkeypatch.setattr(transcribe, "transcribe_all", lambda path, **kw: [])
+    vus = []
+    transcribe.transcribe_windows("s.wav", [(0.0, 10.0), (50.0, 70.0)],
+                                  model=object(),
+                                  on_progress=lambda c, t: vus.append((c, t)))
+    assert vus[-1] == (30.0, 30.0)
